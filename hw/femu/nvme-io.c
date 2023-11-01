@@ -234,6 +234,293 @@ void *nvme_poller(void *arg)
     return NULL;
 }
 
+static inline uint16_t nvme_make_pid(NvmeEnduranceGroup *endgrp, uint16_t rg, uint16_t ph) //update~
+{
+	uint16_t rgif = endgrp->fdp.rgif; 
+
+	if (rgif == 0)
+		return ph;
+
+	return (rg << (16 - rgif) | ph);												
+}																				//~update
+
+static inline bool nvme_ph_valid(NvmeNamespace *ns, uint16_t ph)				//update~
+{
+	return ph < ns->fdp.nphs;
+}																				//~update
+
+static inline bool nvme_rg_valid(NvmeEnduranceGroup *endgrp, uint16_t rg)		//update~
+{
+	return rg < endgrp->fdp.nrg;
+}																				//~update
+
+static inline uint16_t nvme_pid2ph(NvmeNamespace *ns, uint16_t pid)				//update~
+{
+	uint16_t rgif = ns->endgrp->fdp.rgif; 
+
+	if (rgif == 0)
+		return pid;
+
+	return pid & ((1 << (15 - rgif))- 1);
+}																				//~update
+
+static inline uint16_t nvme_pid2rg(NvmeNamespace *ns, uint16_t pid)				//update~
+{
+	uint16_t rgif = ns->endgrp->fdp.rgif;
+
+	if (rgif == 0)
+		return 0;
+
+	return pid >> (16 - rgif);
+}																				//~update 
+
+static inline bool nvme_parse_pid(NvmeNamespace *ns, uint16_t pid,
+							uint16_t *ph, uint16_t *rg)							//update~
+{
+	*ph = nvme_pid2ph(ns, pid);
+	*rg = nvme_pid2rg(ns, pid); 
+
+	return nvme_ph_valid(ns, *ph) && nvme_rg_valid(ns->endgrp, *rg);
+}																				//~update 
+
+static inline void nvme_fdp_stat_inc(uint64_t *a, uint64_t b)					//update~
+{
+    uint64_t ret = *a + b;
+    *a = ret < *a ? UINT64_MAX : ret;
+} 																				//~update
+
+static uint16_t nvme_io_mgmt_recv_ruhs(FemuCtrl *n, NvmeNamespace* ns, NvmeCmd *cmd, //update~
+											NvmeRequest *req, size_t len) 
+{
+	printf("nvme_io_mgmt_recv_ruhs() called\n");
+    NvmeEnduranceGroup *endgrp;
+    NvmeRuhStatus *hdr;
+    NvmeRuhStatusDescr *ruhsd;
+    unsigned int nruhsd;
+    uint16_t rg, ph, *ruhid;
+    size_t trans_len;
+    uint8_t *buf = NULL;  // A buffer to be transmitted to host
+	uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1); //update
+	uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2); //update
+
+	printf("here0\n");
+    if (ns->id == 0 || ns->id == 0xffffffff) {
+        return NVME_INVALID_NSID | NVME_DNR;
+    }
+
+	printf("here1\n");
+    if (!ns->endgrp->fdp.enabled) {
+        return NVME_FDP_DISABLED | NVME_DNR;
+    }
+
+	printf("here2\n");
+    endgrp = ns->endgrp;
+
+    nruhsd = ns->fdp.nphs * endgrp->fdp.nrg; // The number of streams in the endurance group
+    trans_len = sizeof(NvmeRuhStatus) + nruhsd * sizeof(NvmeRuhStatusDescr);
+    buf = g_malloc(trans_len);
+
+    trans_len = MIN(trans_len, len);
+
+    hdr = (NvmeRuhStatus *)buf; // Start Address of RUHS
+    ruhsd = (NvmeRuhStatusDescr *)(buf + sizeof(NvmeRuhStatus)); // Start Address of RUHSD
+
+	// header buffering
+    hdr->nruhsd = cpu_to_le16(nruhsd); 
+
+    ruhid = ns->fdp.phs;
+
+	// ruhsd buffering
+    for (ph = 0; ph < ns->fdp.nphs; ph++, ruhid++) {
+        NvmeRuHandle *ruh = &endgrp->fdp.ruhs[*ruhid];
+
+        for (rg = 0; rg < endgrp->fdp.nrg; rg++, ruhsd++) {
+            uint16_t pid = nvme_make_pid(endgrp, rg, ph);
+
+            ruhsd->pid = cpu_to_le16(pid); 
+            ruhsd->ruhid = *ruhid;
+            ruhsd->earutr = 0;
+            ruhsd->ruamw = cpu_to_le64(ruh->rus[rg].ruamw);
+        }
+    }
+
+    return dma_read_prp(n, buf, trans_len, prp1, prp2);
+}																		//~update 
+
+static uint16_t nvme_io_mgmt_recv(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,	
+													NvmeRequest *req)		//udpate~	
+{
+    uint32_t cdw10 = le32_to_cpu(cmd->cdw10);
+    uint32_t numd = le32_to_cpu(cmd->cdw11);
+    uint8_t mo = (cdw10 & 0xff); // Management operation
+    size_t len = (numd + 1) << 2; // unit: byte
+
+    switch (mo) {
+    case NVME_IOMR_MO_NOP:
+        return 0;
+    case NVME_IOMR_MO_RUH_STATUS:
+        return nvme_io_mgmt_recv_ruhs(n, ns, cmd, req, len);
+    default:
+        return NVME_INVALID_FIELD | NVME_DNR;
+    };
+}																	//~update
+
+static NvmeFdpEvent *nvme_fdp_alloc_event(FemuCtrl *n, NvmeFdpEventBuffer *ebuf)//update~
+{
+	NvmeFdpEvent *ret = NULL;
+	bool is_full = ebuf->next == ebuf->start && ebuf->nelems;
+
+	ret = &ebuf->events[ebuf->next++]; // allocation
+	if (ebuf->next == NVME_FDP_MAX_EVENTS)
+		ebuf->next = 0;
+	if (is_full)
+		ebuf->start = ebuf->next;
+	else
+		ebuf->nelems++;
+
+	memset(ret, 0, sizeof(NvmeFdpEvent)); // fill the 'ret' with 0
+	ret->timestamp = n->features.time_stamp; //update
+
+	return ret;
+}																				//~update
+
+static inline int log_event(NvmeRuHandle *ruh, uint8_t event_type)				//update~
+{
+    return (ruh->event_filter >> nvme_fdp_evf_shifts[event_type]) & 0x1;
+}																				//~update
+
+static bool nvme_update_ruh(FemuCtrl *n, NvmeNamespace *ns, uint16_t pid)		//update~
+{
+	NvmeEnduranceGroup *endgrp = ns->endgrp;
+	NvmeRuHandle *ruh;
+    const uint8_t lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
+    const uint8_t data_shift = ns->id_ns.lbaf[lba_index].lbads;
+	NvmeReclaimUnit *ru;
+	NvmeFdpEvent *e = NULL;
+    uint64_t data_size;
+	uint16_t ph, rg, ruhid;
+
+	if (!nvme_parse_pid(ns, pid, &ph, &rg)) 
+		return false;
+
+	/* A stage that changes PHNDL to RUH */
+	ruhid = ns->fdp.phs[ph];				
+	ruh = &endgrp->fdp.ruhs[ruhid];	
+	ru = &ruh->rus[rg]; 
+	
+    data_size = (uint64_t)ru->ruamw << data_shift;
+
+	if (ru->ruamw) 
+	{
+	// Logging only when the device updates an RUH implicitly,
+	// Not logging when the host updates an RUH explicitly by i/o mgmt cmd.
+		if (log_event(ruh, FDP_EVT_RU_NOT_FULLY_WRITTEN))
+		{
+			e = nvme_fdp_alloc_event(n, &endgrp->fdp.host_events);
+			e->type = FDP_EVT_RU_NOT_FULLY_WRITTEN;
+			e->flags = FDPEF_PIV | FDPEF_NSIDV | FDPEF_LV;
+			e->pid = cpu_to_le16(pid);
+			e->nsid = cpu_to_le32(ns->id);
+			e->rgid = cpu_to_le16(rg);
+			e->ruhid = cpu_to_le16(ruhid);
+		}
+		
+		nvme_fdp_stat_inc(&endgrp->fdp.mbmw, data_size);
+	}
+
+	ru->ruamw = ruh->ruamw; // Reset
+
+	return true;
+}	 																				//~update
+
+static uint16_t nvme_io_mgmt_send_ruh_update(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, //update~
+															NvmeRequest *req)			
+{
+    uint32_t cdw10 = le32_to_cpu(cmd->cdw10);
+    uint16_t ret = NVME_SUCCESS;
+    uint32_t npid = (cdw10 >> 1) + 1;
+    int i;
+    uint16_t *pids = NULL;
+    uint32_t maxnpid = n->endgrps->fdp.nrg * n->endgrps->fdp.nruh;
+	uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1);
+	uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2);
+
+    if (unlikely(npid >= MIN(NVME_FDP_MAXPIDS, maxnpid))) {
+        return NVME_INVALID_FIELD | NVME_DNR;
+    }
+
+    pids = g_new(uint16_t, npid);
+
+	ret = dma_write_prp(n, (uint8_t *)pids, npid * sizeof(uint16_t), prp1, prp2);
+
+    if (ret) {
+        return ret;
+    }
+
+    for (i = 0; i < npid; i++) {
+        if (!nvme_update_ruh(n, ns, pids[i])) {
+            return NVME_INVALID_FIELD | NVME_DNR;
+        }
+    }
+
+    return ret;
+}																					//~update
+
+static uint16_t nvme_io_mgmt_send(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, //update~
+												NvmeRequest *req)	
+{
+    uint32_t cdw10 = le32_to_cpu(cmd->cdw10);
+    uint8_t mo = (cdw10 & 0xff);
+
+    switch (mo) {
+    case NVME_IOMS_MO_NOP:
+        return 0;
+    case NVME_IOMS_MO_RUH_UPDATE:
+        return nvme_io_mgmt_send_ruh_update(n, ns, cmd, req);
+    default:
+        return NVME_INVALID_FIELD | NVME_DNR;
+    };
+}																	//~update 
+
+static void nvme_do_write_fdp(FemuCtrl *n, NvmeRequest *req, uint32_t nlb) //update~
+{
+    NvmeNamespace *ns = req->ns;
+    NvmeRwCmd *rw = (NvmeRwCmd *)&req->cmd;
+    const uint8_t lba_index = NVME_ID_NS_FLBAS_INDEX(ns->id_ns.flbas);
+    const uint8_t data_shift = ns->id_ns.lbaf[lba_index].lbads;
+    uint64_t data_size = (uint64_t)nlb << data_shift;
+    uint32_t dw12 = le32_to_cpu(req->cmd.cdw12);
+    uint8_t dtype = (dw12 >> 20) & 0xf;
+    uint16_t pid = le16_to_cpu(rw->dspec);
+    uint16_t ph, rg, ruhid;
+    NvmeReclaimUnit *ru;
+
+	printf("dtype: %d, pid(dspec): %d\n", dtype, pid);
+    if (dtype != NVME_DIRECTIVE_DATA_PLACEMENT || !nvme_parse_pid(ns, pid, &ph, &rg))
+	{
+        ph = 0;
+        rg = 0;
+    } 
+
+    ruhid = ns->fdp.phs[ph];
+    ru = &ns->endgrp->fdp.ruhs[ruhid].rus[rg];
+
+	printf("rg: %d, ph: %d, ruhid: %d\n", rg, ph, ruhid);
+
+    nvme_fdp_stat_inc(&ns->endgrp->fdp.hbmw, data_size);
+    nvme_fdp_stat_inc(&ns->endgrp->fdp.mbmw, data_size);
+
+    while (nlb) {
+        if (nlb < ru->ruamw) {
+            ru->ruamw -= nlb;
+            break;
+        }
+
+        nlb -= ru->ruamw;
+        nvme_update_ruh(n, ns, pid);
+    }
+} 																			//~update
+
 uint16_t nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
 {
     NvmeRwCmd *rw = (NvmeRwCmd *)cmd;
@@ -256,8 +543,13 @@ uint16_t nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req)
 
     err = femu_nvme_rw_check_req(n, ns, cmd, req, slba, elba, nlb, ctrl,
                                  data_size, meta_size);
-    if (err)
+    if (err) {
         return err;
+	}
+
+	if (ns->endgrp && ns->endgrp->fdp.enabled) { //update~
+		nvme_do_write_fdp(n, req, nlb);  		
+	}											 //~update
 
     if (nvme_map_prp(&req->qsg, &req->iov, prp1, prp2, data_size, n)) {
         nvme_set_error_page(n, req->sq->sqid, cmd->cid, NVME_INVALID_FIELD,
@@ -448,6 +740,10 @@ static uint16_t nvme_io_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req)
             return nvme_write_uncor(n, ns, cmd, req);
         }
         return NVME_INVALID_OPCODE | NVME_DNR;
+	case NVME_CMD_IO_MGMT_RECV: //update~
+		return nvme_io_mgmt_recv(n, ns, cmd, req); // FIXME: No enable condition
+	case NVME_CMD_IO_MGMT_SEND:					
+		return nvme_io_mgmt_send(n, ns, cmd, req); // FIXME: No enable condition //~update
     default:
         if (n->ext_ops.io_cmd) {
             return n->ext_ops.io_cmd(n, ns, cmd, req);
