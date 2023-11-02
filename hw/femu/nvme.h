@@ -41,11 +41,11 @@ typedef struct NvmeReclaimUnit {		//update~
 } NvmeReclaimUnit;						//~update
 
 typedef struct NvmeRuHandle {			//update~
-    uint8_t  ruht;
-    uint8_t  ruha;
+    uint8_t  ruht;			//initially isolated or persistently isolated
+    uint8_t  ruha;			//host specified or controller specified
     uint64_t event_filter;
     uint8_t  lbafi;
-    uint64_t ruamw;
+    uint64_t ruamw;			//reclaim unit available media writes(remaining sectors)
 
     /* reclaim units indexed by reclaim group */
     NvmeReclaimUnit *rus;
@@ -1541,6 +1541,7 @@ typedef struct NvmeDirectiveIdentify { // update~
 
 enum NvmeDirectiveTypes {
     NVME_DIRECTIVE_IDENTIFY       = 0x0,
+    NVME_DIRECTIVE_STREAM         = 0x1,
     NVME_DIRECTIVE_DATA_PLACEMENT = 0x2,
 };
 

@@ -496,6 +496,7 @@ static void nvme_do_write_fdp(FemuCtrl *n, NvmeRequest *req, uint32_t nlb) //upd
     NvmeReclaimUnit *ru;
 
 	printf("dtype: %d, pid(dspec): %d\n", dtype, pid);
+	/* Normal write */
     if (dtype != NVME_DIRECTIVE_DATA_PLACEMENT || !nvme_parse_pid(ns, pid, &ph, &rg))
 	{
         ph = 0;

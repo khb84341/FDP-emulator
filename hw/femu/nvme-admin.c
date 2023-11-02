@@ -778,7 +778,6 @@ static uint16_t nvme_set_feature(FemuCtrl *n, NvmeCmd *cmd, NvmeCqe *cqe)
 		n->features.time_stamp = dw11;
 		break;
 	case NVME_FDP_MODE:							
-		printf("in fdp_mode\n");
         n->features.fdp_mode = dw11;
 		break;
 	case NVME_FDP_EVENTS:

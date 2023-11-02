@@ -125,8 +125,10 @@ struct ssdparams {
 
     double gc_thres_pcent;
     int gc_thres_lines;
+	int gc_thres_rus;			//update
     double gc_thres_pcent_high;
     int gc_thres_lines_high;
+    int gc_thres_rus_high; 		//update
     bool enable_gc_delay;
 
     /* below are all calculated values */
@@ -194,6 +196,35 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
+typedef struct ru {			//update~
+	int id;
+	struct {
+		int lun;
+		int pg;
+	} loc; 
+	QTAILQ_ENTRY(blk) entry;	/* in either {free, victim, full} list */
+	size_t pos;					/* position in the priority queue for victim ru */
+	int ruhid;					/* for gc */
+	bool for_gc;
+} ru; 						//~update
+
+struct ruhtbl {				//update~
+	int ruht;
+	struct ru *cur_ru;
+};							//~update
+
+struct fdp_ru_mgmt {		//update~
+	struct ru *rus;
+	QTAILQ_HEAD(free_ru_list, blk) free_ru_list;
+	pqueue_t *victim_ru_pq;
+    //QTAILQ_HEAD(victim_blk_list, blk) victim_blk_list;
+	QTAILQ_HEAD(full_ru_list, blk) full_ru_list;
+	int tt_rus;
+	int free_ru_cnt;
+	int victim_ru_cnt;
+	int full_ru_cnt; 
+};							//~update
+
 struct ssd {
     char *ssdname;
     struct ssdparams sp;
@@ -202,6 +233,8 @@ struct ssd {
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
+	struct fdp_ru_mgmt* rums; 	/* raclaim unit managements */			//update
+	struct ruhtbl *rts;			/* ruh tables */						//update
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;
