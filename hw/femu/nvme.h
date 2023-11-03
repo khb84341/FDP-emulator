@@ -34,6 +34,7 @@
 #define NVME_FDP_MAX_EVENTS 63			//update~
 #define NVME_FDP_MAXPIDS 128			
 #define NVME_MAX_NAMESPACES 1			
+#define MAX_RUHS			8			
 #define RG_DEGREE			4			//~update
 
 typedef struct NvmeReclaimUnit {		//update~
@@ -41,11 +42,11 @@ typedef struct NvmeReclaimUnit {		//update~
 } NvmeReclaimUnit;						//~update
 
 typedef struct NvmeRuHandle {			//update~
-    uint8_t  ruht;			//initially isolated or persistently isolated
-    uint8_t  ruha;			//host specified or controller specified
+    uint8_t  ruht;			// initially isolated or persistently isolated
+    uint8_t  ruha;			// host specified or controller specified
     uint64_t event_filter;
     uint8_t  lbafi;
-    uint64_t ruamw;			//reclaim unit available media writes(remaining sectors)
+    uint64_t ruamw;			// reclaim unit available media writes(remaining sectors)
 
     /* reclaim units indexed by reclaim group */
     NvmeReclaimUnit *rus;

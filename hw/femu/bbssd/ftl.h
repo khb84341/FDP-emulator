@@ -196,29 +196,35 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-typedef struct ru {			//update~
+struct ru {			//update~
 	int id;
 	struct {
+		int ch;
 		int lun;
+		int pl;
+		int blk;
 		int pg;
-	} loc; 
-	QTAILQ_ENTRY(blk) entry;	/* in either {free, victim, full} list */
+	} fdp_wp;
+	struct nand_block* blks[RG_DEGREE];
+	int ipc;
+	int vpc;
+	QTAILQ_ENTRY(ru) entry;	/* in either {free, victim, full} list */
 	size_t pos;					/* position in the priority queue for victim ru */
-	int ruhid;					/* for gc */
+	int ruhid;					/* needed for gc */
 	bool for_gc;
-} ru; 						//~update
+}ru; 					
 
-struct ruhtbl {				//update~
+struct ruh {				
 	int ruht;
-	struct ru *cur_ru;
-};							//~update
+	int* cur_ruids;
+};						
 
-struct fdp_ru_mgmt {		//update~
+struct fdp_ru_mgmt {	
 	struct ru *rus;
-	QTAILQ_HEAD(free_ru_list, blk) free_ru_list;
+	QTAILQ_HEAD(free_ru_list, ru) free_ru_list;
 	pqueue_t *victim_ru_pq;
     //QTAILQ_HEAD(victim_blk_list, blk) victim_blk_list;
-	QTAILQ_HEAD(full_ru_list, blk) full_ru_list;
+	QTAILQ_HEAD(full_ru_list, ru) full_ru_list;
 	int tt_rus;
 	int free_ru_cnt;
 	int victim_ru_cnt;
@@ -233,8 +239,8 @@ struct ssd {
     uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
     struct write_pointer wp;
     struct line_mgmt lm;
-	struct fdp_ru_mgmt* rums; 	/* raclaim unit managements */			//update
-	struct ruhtbl *rts;			/* ruh tables */						//update
+	struct fdp_ru_mgmt *rums; 	/* raclaim unit managements */			//update
+	struct ruh *rt;			/* ruh table */						//update
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;

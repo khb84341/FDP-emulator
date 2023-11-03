@@ -379,7 +379,7 @@ static int nvme_init_endgrps(FemuCtrl *n, Error **errp) 				//update~
 		endgrp->fdp.runs = RG_DEGREE * bbp->pgs_per_blk * bbp->secs_per_pg * bbp->secsz;	
 		endgrp->fdp.nrg = bbp->nchs * bbp->luns_per_ch / RG_DEGREE; // # of RGs
 		endgrp->fdp.rgif = cal_rgif(endgrp->fdp.nrg);				// # of bits for RG in PID
-		endgrp->fdp.nruh = NVME_FDP_MAXPIDS / endgrp->fdp.nrg;		// Maximum
+		endgrp->fdp.nruh = MAX_RUHS;
 
 		endgrp->fdp.hbmw = 0;
 		endgrp->fdp.mbmw = 0;
