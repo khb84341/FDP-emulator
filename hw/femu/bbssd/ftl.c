@@ -177,11 +177,11 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 		{ 
 			ru = &rum->rus[j];
 			ru->id = j;
-			ru->fdp_wp.ch = i * RG_DEGREE / spp->luns_per_ch;
-			ru->fdp_wp.lun = i * RG_DEGREE % spp->luns_per_ch; 
-			ru->fdp_wp.pl = 0;
-			ru->fdp_wp.blk = j;
-			ru->fdp_wp.pg = 0;
+			ru->wp.ch = i * RG_DEGREE / spp->luns_per_ch;
+			ru->wp.lun = i * RG_DEGREE % spp->luns_per_ch; 
+			ru->wp.pl = 0;
+			ru->wp.blk = j;
+			ru->wp.pg = 0;
 			ru->ipc = 0;
 			ru->vpc = 0;
 			ru->pos = 0; 
@@ -191,12 +191,13 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 			//ru->blks = gmalloc0(sizeof(struct nand_block*) * RG_DEGREE); 
 			for (int k = 0; k < RG_DEGREE; k++)
 			{
-				int cur_ch = ru->fdp_wp.ch + k / spp->luns_per_ch;
-				int cur_lun = (ru->fdp_wp.lun + k) % spp->luns_per_ch;
+				int cur_ch = ru->wp.ch + k / spp->luns_per_ch;
+				int cur_lun = (ru->wp.lun + k) % spp->luns_per_ch;
 
 				ru->blks[k] = &ssd->ch[cur_ch].lun[cur_lun].pl[0].blk[blkoff]; 
 			} 
-			/* initialize all the rus as free rus */
+
+			/* initialize all the reclaim units as free reclaim units */
 			QTAILQ_INSERT_TAIL(&rum->free_ru_list, ru, entry);
 			rum->free_ru_cnt++;
 		}
@@ -207,7 +208,7 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 	} 
 }														//~update
 
-static struct ru *get_next_free_ru(struct ssd *ssd, struct fdp_ru_mgmt *rum) //update~
+static int get_next_free_ruid(struct ssd *ssd, struct fdp_ru_mgmt *rum) //update~
 {
 	struct ru *retru = NULL;
 
@@ -215,28 +216,34 @@ static struct ru *get_next_free_ru(struct ssd *ssd, struct fdp_ru_mgmt *rum) //u
 	if (!retru)
 	{
 		ftl_err("No free reclaim units left in [%s] !!!!\n", ssd->ssdname);
-		return NULL;
+		return -1;
 	}
 
 	QTAILQ_REMOVE(&rum->free_ru_list, retru, entry);
 	rum->free_ru_cnt--;
 
-	return retru; 
+	return retru->id; 
 }																			//~update
 
 static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 {
 	NvmeEnduranceGroup *endgrp = &n->endgrps[0];
 	struct ruh *ruh = NULL;
+	struct fdp_ru_mgmt *rum = NULL;
 
-	ssd->rt = g_malloc0(sizeof(struct ruh) * endgrp->fdp.nruh); 
+	ssd->ruhtbl = g_malloc0(sizeof(struct ruh) * endgrp->fdp.nruh); 
 	for (int i = 0; i < endgrp->fdp.nruh; i++)
 	{
-		ruh = &ssd->rt[i];
+		ruh = &ssd->ruhtbl[i];
 		ruh->ruht = endgrp->fdp.ruhs[i].ruht;
 		ruh->cur_ruids = g_malloc0(sizeof(int) * endgrp->fdp.nrg);
 		for (int j = 0; j < MAX_RUHS; j++) 
+		{
+			rum = &ssd->rums[j];
+			/* ruh history for gc */	
+			rum->rus[i].ruhid = i;
 			ruh->cur_ruids[j] = j;
+		}
 	} 
 }																		//~update
 
@@ -332,6 +339,96 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
             }
         }
     }
+}
+
+static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16_t ruhid)
+{
+	struct ssdparams *spp = &ssd->sp;
+	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
+	struct ruh *ruh = &ssd->ruhtbl[ruhid];
+	int ruid = ruh->cur_ruids[rgid]; 			
+	struct ru *ru = &rum->rus[ruid];
+
+	/* Case that an RG has more than two channels */
+	if (RG_DEGREE > spp->luns_per_ch)
+	{ 
+		check_addr(ru->wp.lun, spp->luns_per_ch);
+		ru->wp.lun++;
+		/* move to next channel */
+		if (ru->wp.lun == spp->luns_per_ch)
+		{
+			ru->wp.lun = 0;
+			check_addr(ru->wp.ch, spp->nchs);
+			ru->wp.ch++;
+			/* move to next page # */
+			if (ru->wp.ch == (rgid + 1) * (RG_DEGREE / spp->luns_per_ch))
+			{ 
+				ru->wp.ch = rgid * RG_DEGREE;
+				check_addr(ru->wp.pg, spp->pgs_per_blk);
+				ru->wp.pg++;
+				if (ru->wp.pg == spp->pgs_per_blk)
+				{
+					/* move current ru to {victim,full} ru list */
+					if (ru->vpc == spp->pgs_per_blk * RG_DEGREE)
+					{
+						/* all pgs are still valid, move to full ru list */
+						ftl_assert(ru->ipc == 0);
+						QTAILQ_INSERT_TAIL(&rum->full_ru_list, ru, entry);
+						rum->full_ru_cnt++;
+					}
+					else
+					{
+						/* there must be some invalid pages in this ru */
+						ftl_assert(ru->vpn >= 0 && ru->vpc < RG_DEGREE * spp->pgs_per_blk);
+						ftl_assert(ru->ipc > 0);
+						pqueue_insert(rum->victim_ru_pq, ru);
+						rum->victim_ru_cnt++;
+					}
+					/* current ru is used up, pick another empty ru */ 
+					ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
+					ru->ruhid = ruhid;
+					ru->for_gc = false;
+				}
+			}
+		}
+	}
+
+	/* Case that an RG is included in one channel */
+	else 
+	{
+		check_addr(ru->wp.lun, spp->luns_per_ch); 
+		ru->wp.lun++;
+		/* move to next page */
+		if (ru->wp.lun / RG_DEGREE == 0)
+		{
+			check_addr(ru->wp.pg, spp->pgs_per_ch);
+			ru->wp.pg++;
+			if (ru->wp.pg == spp->pgs_per_blk)
+			{
+				/* move current ru to {victim,full} ru list */
+				if (ru->vpc == spp->pgs_per_blk * RG_DEGREE)
+				{
+					/* all pgs are still valid, move to full ru list */
+					ftl_assert(ru->ipc == 0);
+					QTAILQ_INSERT_TAIL(&rum->full_ru_list, ru, entry);
+					rum->full_ru_cnt++;
+				}
+				else
+				{
+					/* there must be some invalid pages in this ru */
+					ftl_assert(ru->vpn >= 0 && ru->vpc < RG_DEGREE * spp->pgs_per_blk);
+					ftl_assert(ru->ipc > 0);
+					pqueue_insert(rum->victim_ru_pq, ru);
+					rum->victim_ru_cnt++;
+				}
+				/* current ru is used up, pick another empty ru */ 
+				ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
+				ru->ruhid = ruhid;
+				ru->for_gc = false;
+
+			}
+		}
+	}
 }
 
 static struct ppa get_new_page(struct ssd *ssd)

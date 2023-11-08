@@ -204,11 +204,11 @@ struct ru {			//update~
 		int pl;
 		int blk;
 		int pg;
-	} fdp_wp;
+	} wp;
 	struct nand_block* blks[RG_DEGREE];
 	int ipc;
 	int vpc;
-	QTAILQ_ENTRY(ru) entry;	/* in either {free, victim, full} list */
+	QTAILQ_ENTRY(ru) entry;		/* in either {free, victim, full} list */
 	size_t pos;					/* position in the priority queue for victim ru */
 	int ruhid;					/* needed for gc */
 	bool for_gc;
@@ -240,7 +240,7 @@ struct ssd {
     struct write_pointer wp;
     struct line_mgmt lm;
 	struct fdp_ru_mgmt *rums; 	/* raclaim unit managements */			//update
-	struct ruh *rt;			/* ruh table */						//update
+	struct ruh *ruhtbl;			/* ruh table */						//update
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;
