@@ -186,6 +186,9 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 			ru->vpc = 0;
 			ru->pos = 0; 
 			ru->for_gc = false;
+			/* ruh history for gc */	
+			if (j < MAX_RUHS)
+				ru->ruhid = j;
 
 			blkoff = j % spp->blks_per_pl;
 			//ru->blks = gmalloc0(sizeof(struct nand_block*) * RG_DEGREE); 
@@ -223,13 +226,13 @@ static int get_next_free_ruid(struct ssd *ssd, struct fdp_ru_mgmt *rum) //update
 	rum->free_ru_cnt--;
 
 	return retru->id; 
-}																			//~update
+}																		//~update
 
 static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 {
 	NvmeEnduranceGroup *endgrp = &n->endgrps[0];
 	struct ruh *ruh = NULL;
-	struct fdp_ru_mgmt *rum = NULL;
+	//struct fdp_ru_mgmt *rum = NULL;
 
 	ssd->ruhtbl = g_malloc0(sizeof(struct ruh) * endgrp->fdp.nruh); 
 	for (int i = 0; i < endgrp->fdp.nruh; i++)
@@ -237,13 +240,8 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 		ruh = &ssd->ruhtbl[i];
 		ruh->ruht = endgrp->fdp.ruhs[i].ruht;
 		ruh->cur_ruids = g_malloc0(sizeof(int) * endgrp->fdp.nrg);
-		for (int j = 0; j < MAX_RUHS; j++) 
-		{
-			rum = &ssd->rums[j];
-			/* ruh history for gc */	
-			rum->rus[i].ruhid = i;
-			ruh->cur_ruids[j] = j;
-		}
+		for (int j = 0; j < endgrp->fdp.nrg; j++) 
+			ruh->cur_ruids[j] = i;
 	} 
 }																		//~update
 
@@ -341,7 +339,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
     }
 }
 
-static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16_t ruhid)
+static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16_t ruhid)//update~
 {
 	struct ssdparams *spp = &ssd->sp;
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
@@ -429,7 +427,7 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 			}
 		}
 	}
-}
+}																					//~update
 
 static struct ppa get_new_page(struct ssd *ssd)
 {
@@ -444,6 +442,25 @@ static struct ppa get_new_page(struct ssd *ssd)
     ftl_assert(ppa.g.pl == 0);
 
     return ppa;
+}
+
+static struct ppa fdp_get_new_page(struct ssd *ssd, uint16_t rgid, uint16_t ruhid)
+{
+	struct ruh *ruh = &ssd->ruhtbl[ruhid];
+	int ruid = ruh->cur_ruids[rgid];
+	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
+	struct ru *ru = &rum->rus[ruid]; 
+	struct ppa ppa;
+
+    ppa.ppa = 0;
+    ppa.g.ch = ru->wp.ch;
+    ppa.g.lun = ru->wp.lun;
+    ppa.g.pg = ru->wp.pg;
+    ppa.g.blk = ru->wp.blk;
+    ppa.g.pl = ru->wp.pl;
+    ftl_assert(ppa.g.pl == 0);
+
+	return ppa;
 }
 
 static void check_params(struct ssdparams *spp)
@@ -607,11 +624,12 @@ void ssd_init(FemuCtrl *n)
     /* initialize all the lines */
     ssd_init_lines(ssd);
 
+    ssd_init_write_pointer(ssd);
+
 	ssd_init_fdp_ru_mgmts(ssd); 						//update~
 
 	ssd_init_fdp_ruhtbl(n, ssd);							//~update
     /* initialize write pointer, this is how we allocate new pages for writes */
-    ssd_init_write_pointer(ssd);
 
     qemu_thread_create(&ssd->ftl_thread, "FEMU-FTL-Thread", ftl_thread, n,
                        QEMU_THREAD_JOINABLE);
@@ -1039,18 +1057,44 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     struct ppa ppa;
     uint64_t lpn;
     uint64_t curlat = 0, maxlat = 0;
-    int r;
+    int r = 0;
+
+	NvmeRwCmd *rw = (NvmeRwCmd*)&req->cmd;			//update~
+	NvmeNamespace *ns = req->ns;
+	NvmeEnduranceGroup *endgrp = ns->endgrp;
+	uint16_t pid = le16_to_cpu(rw->dspec);
+	uint16_t rgif = endgrp->fdp.rgif;
+	uint16_t rgid = pid >> (16 - rgif);
+	uint16_t ph = pid & ((1 << (15 - rgif)) - 1);
+	uint16_t ruhid = ns->fdp.phs[ph];
+	bool fdp_enabled = endgrp->fdp.enabled;			//~update
+
+	printf("rgid: %d, ph: %d\n", rgid, ph);
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
-    }
+    } 
 
-    while (should_gc_high(ssd)) {
-        /* perform GC here until !should_gc(ssd) */
-        r = do_gc(ssd, true);
-        if (r == -1)
-            break;
-    }
+	if (fdp_enabled)	
+	{
+		/* perform GC here until !should_fdp_gc(ssd, rgid) */
+		while (should_fdp_gc_high(ssd, rgid))
+		{
+			//r = do_fdp_gc(ssd, endgrp, rgid, true);
+			if (r == -1)
+				break;
+		}
+	}
+	else
+	{
+		/* perform GC here until !should_gc(ssd) */
+		while (should_gc_high(ssd))
+		{
+			r = do_gc(ssd, true);
+			if (r == -1)
+				break;
+		}
+	}
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
@@ -1061,7 +1105,14 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         }
 
         /* new write */
-        ppa = get_new_page(ssd);
+		if (fdp_enabled)
+			ppa = fdp_get_new_page(ssd, rgid, ruhid);
+		else
+			ppa = get_new_page(ssd);
+
+		printf("ch: %d, lun: %d, blk: %d, pg: %d\n", 
+				ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pg);
+
         /* update maptbl */
         set_maptbl_ent(ssd, lpn, &ppa);
         /* update rmap */
@@ -1070,7 +1121,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         mark_page_valid(ssd, &ppa);
 
         /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd);
+		if (fdp_enabled)
+			ssd_advance_fdp_write_pointer(ssd, rgid, ruhid);
+		else
+			ssd_advance_write_pointer(ssd);
 
         struct nand_cmd swr;
         swr.type = USER_IO;

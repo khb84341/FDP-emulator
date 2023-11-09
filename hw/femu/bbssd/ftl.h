@@ -196,7 +196,7 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-struct ru {			//update~
+typedef struct ru {			//update~
 	int id;
 	struct {
 		int ch;
@@ -212,7 +212,7 @@ struct ru {			//update~
 	size_t pos;					/* position in the priority queue for victim ru */
 	int ruhid;					/* needed for gc */
 	bool for_gc;
-}ru; 					
+} ru; 					
 
 struct ruh {				
 	int ruht;
@@ -240,7 +240,7 @@ struct ssd {
     struct write_pointer wp;
     struct line_mgmt lm;
 	struct fdp_ru_mgmt *rums; 	/* raclaim unit managements */			//update
-	struct ruh *ruhtbl;			/* ruh table */						//update
+	struct ruh *ruhtbl;			/* ruh table */							//update
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;
