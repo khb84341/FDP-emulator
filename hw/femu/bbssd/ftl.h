@@ -152,6 +152,11 @@ struct ssdparams {
     int blks_per_line;
     int tt_lines;
 
+    int secs_per_ru;
+    int pgs_per_ru;
+    int blks_per_ru;
+    int tt_rus;
+
     int pls_per_ch;   /* # of planes per channel */
     int tt_pls;       /* total # of planes in the SSD */
 
@@ -211,7 +216,7 @@ typedef struct ru {			//update~
 	QTAILQ_ENTRY(ru) entry;		/* in either {free, victim, full} list */
 	size_t pos;					/* position in the priority queue for victim ru */
 	int ruhid;					/* needed for gc */
-	bool for_gc;
+	bool for_gc;				/* used only for gc */
 } ru; 					
 
 struct ruh {				

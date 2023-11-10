@@ -36,7 +36,7 @@
 #define NVME_MAX_NAMESPACES 1			
 #define NVME_MAX_ENDGRPS	1			
 #define MAX_RUHS			8			
-#define RG_DEGREE			32			//~update
+#define RG_DEGREE			4			//~update
 
 typedef struct NvmeReclaimUnit {		//update~
     uint64_t ruamw;

@@ -408,12 +408,14 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 		check_addr(ru->wp.lun, spp->luns_per_ch); 
 		ru->wp.lun++;
 		/* move to next page */
-		if (ru->wp.lun / RG_DEGREE == 0)
+		if (ru->wp.lun % RG_DEGREE == 0)
 		{
+			ru->wp.lun = 0;
 			check_addr(ru->wp.pg, spp->pgs_per_ch);
 			ru->wp.pg++;
 			if (ru->wp.pg == spp->pgs_per_blk)
 			{
+				ru->wp.pg = 0;
 				/* move current ru to {victim,full} ru list */
 				if (ru->vpc == spp->pgs_per_blk * RG_DEGREE)
 				{
@@ -433,8 +435,12 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 				/* current ru is used up, pick another empty ru */ 
 				ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
 				ru->ruhid = ruhid;
-				ru->for_gc = false;
-
+				ru->for_gc = false; 
+				/* make sure we are starting from page 0 in the ru */
+				ftl_assert(ru->wp.pg == 0);
+				ftl_assert(ru->wp.lun == 0);
+				/* TODO: assume # of pl_per_lun is 1, fix later */
+				ftl_assert(ru->wp.pl == 0);
 			}
 		}
 	}
@@ -527,6 +533,11 @@ static void ssd_init_params(struct ssdparams *spp, FemuCtrl *n)
     spp->secs_per_line = spp->pgs_per_line * spp->secs_per_pg;
     spp->tt_lines = spp->blks_per_lun; /* TODO: to fix under multiplanes */
 
+    spp->blks_per_ru = RG_DEGREE; 
+    spp->pgs_per_ru = spp->blks_per_ru * spp->pgs_per_blk;
+    spp->secs_per_ru = spp->pgs_per_ru * spp->secs_per_pg;
+    spp->tt_rus = spp->blks_per_lun * (spp->tt_luns / RG_DEGREE); 
+	
     spp->gc_thres_pcent = n->bb_params.gc_thres_pcent/100.0;
     spp->gc_thres_lines = (int)((1 - spp->gc_thres_pcent) * spp->tt_lines);
     spp->gc_thres_pcent_high = n->bb_params.gc_thres_pcent_high/100.0;
@@ -942,6 +953,28 @@ static struct line *select_victim_line(struct ssd *ssd, bool force)
     return victim_line;
 }
 
+static struct ru *select_victim_ru(struct ssd *ssd, bool force, int rgid)
+{
+    struct ru_mgmt *rum = &ssd->rums[rgid];
+    struct ru *victim_ru = NULL;
+
+    victim_ru = pqueue_peek(rum->victim_ru_pq);
+    if (!victim_ru) {
+        return NULL;
+    }
+
+    if (!force && victim_ru->ipc < ssd->sp.pgs_per_ru / 8) {
+        return NULL;
+    }
+
+    pqueue_pop(rum->victim_ru_pq);
+    victim_ru->pos = 0;
+    rum->victim_ru_cnt--;
+
+    /* victim_ru is a danggling node now */
+    return victim_ru;
+}
+
 /* here ppa identifies the block we want to clean */
 static void clean_one_block(struct ssd *ssd, struct ppa *ppa)
 {
@@ -1063,6 +1096,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t lba = req->slba;
     struct ssdparams *spp = &ssd->sp;
     int len = req->nlb;
+	printf("len: %d\n", len);
     uint64_t start_lpn = lba / spp->secs_per_pg;
     uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
     struct ppa ppa;
@@ -1080,7 +1114,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 	uint16_t ruhid = ns->fdp.phs[ph];
 	bool fdp_enabled = endgrp->fdp.enabled;			//~update
 
-	printf("rgid: %d, ph: %d\n", rgid, ph);
+	printf("rgid: %d, ph: %d, rgif: %d\n", rgid, ph, rgif);
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1107,6 +1141,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 		}
 	}
 
+	printf("start_lpn: %ld, end_lpn: %ld\n", start_lpn, end_lpn);
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
         if (mapped_ppa(&ppa)) {
