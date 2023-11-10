@@ -232,7 +232,7 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 {
 	NvmeEnduranceGroup *endgrp = &n->endgrps[0];
 	struct ruh *ruh = NULL;
-	//struct fdp_ru_mgmt *rum = NULL;
+	struct fdp_ru_mgmt *rum = NULL;
 
 	ssd->ruhtbl = g_malloc0(sizeof(struct ruh) * endgrp->fdp.nruh); 
 	for (int i = 0; i < endgrp->fdp.nruh; i++)
@@ -241,7 +241,10 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 		ruh->ruht = endgrp->fdp.ruhs[i].ruht;
 		ruh->cur_ruids = g_malloc0(sizeof(int) * endgrp->fdp.nrg);
 		for (int j = 0; j < endgrp->fdp.nrg; j++) 
-			ruh->cur_ruids[j] = i;
+		{
+			rum = &ssd->rums[j];
+			ruh->cur_ruids[j] = get_next_free_ruid(ssd, rum);
+		}
 	} 
 }																		//~update
 
@@ -346,50 +349,58 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 	struct ruh *ruh = &ssd->ruhtbl[ruhid];
 	int ruid = ruh->cur_ruids[rgid]; 			
 	struct ru *ru = &rum->rus[ruid];
+	int max_ch = (rgid + 1) * (RG_DEGREE / spp->luns_per_ch);
 
-	/* Case that an RG has more than two channels */
+	/* Case that an RG has more than two channels -> same with the origin */
 	if (RG_DEGREE > spp->luns_per_ch)
 	{ 
-		check_addr(ru->wp.lun, spp->luns_per_ch);
-		ru->wp.lun++;
-		/* move to next channel */
-		if (ru->wp.lun == spp->luns_per_ch)
-		{
-			ru->wp.lun = 0;
-			check_addr(ru->wp.ch, spp->nchs);
-			ru->wp.ch++;
-			/* move to next page # */
-			if (ru->wp.ch == (rgid + 1) * (RG_DEGREE / spp->luns_per_ch))
-			{ 
-				ru->wp.ch = rgid * RG_DEGREE;
+		check_addr(ru->wp.ch, max_ch);
+		ru->wp.ch++;
+		if (ru->wp.ch == max_ch) {
+			ru->wp.ch = rgid * (RG_DEGREE / spp->luns_per_ch);
+			check_addr(ru->wp.lun, spp->luns_per_ch);
+			ru->wp.lun++;
+			/* in this case, we should go to next lun */
+			if (ru->wp.lun == spp->luns_per_ch) {
+				ru->wp.lun = 0;
+				/* go to next page in the block */
 				check_addr(ru->wp.pg, spp->pgs_per_blk);
 				ru->wp.pg++;
-				if (ru->wp.pg == spp->pgs_per_blk)
-				{
+				if (ru->wp.pg == spp->pgs_per_blk) {
+					ru->wp.pg = 0;
 					/* move current ru to {victim,full} ru list */
-					if (ru->vpc == spp->pgs_per_blk * RG_DEGREE)
-					{
+					if (ru->vpc == spp->pgs_per_ru) {
 						/* all pgs are still valid, move to full ru list */
 						ftl_assert(ru->ipc == 0);
 						QTAILQ_INSERT_TAIL(&rum->full_ru_list, ru, entry);
 						rum->full_ru_cnt++;
-					}
-					else
-					{
+					} else {
+						ftl_assert(ru->vpc >= 0 && ru->vpc < spp->pgs_per_ru);
 						/* there must be some invalid pages in this ru */
-						ftl_assert(ru->vpn >= 0 && ru->vpc < RG_DEGREE * spp->pgs_per_blk);
 						ftl_assert(ru->ipc > 0);
 						pqueue_insert(rum->victim_ru_pq, ru);
 						rum->victim_ru_cnt++;
 					}
-					/* current ru is used up, pick another empty ru */ 
+					/* current ru is used up, pick another empty ru */
+					check_addr(ru->wp.blk, spp->blks_per_pl);
+
+					/* update ruhtbl */
 					ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
+					/* ruh history for gc later */
 					ru->ruhid = ruhid;
-					ru->for_gc = false;
+					ru->for_gc = false; 
+
+					check_addr(ru->wp.blk, spp->blks_per_pl);
+					/* make sure we are starting from page 0 in the ru */
+					ftl_assert(ru->wp.pg == 0);
+					ftl_assert(ru->wp.lun == 0);
+					ftl_assert(ru->wp.ch == rgid * (RG_DEGREE / spp->luns_per_ch));
+					/* TODO: assume # of pl_per_lun is 1, fix later */
+					ftl_assert(ru->wp.pl == 0);
 				}
 			}
-		}
-	}
+		} 
+	} 
 
 	/* Case that an RG is included in one channel */
 	else 
