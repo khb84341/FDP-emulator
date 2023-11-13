@@ -35,8 +35,8 @@
 #define NVME_FDP_MAXPIDS 	128			
 #define NVME_MAX_NAMESPACES 1			
 #define NVME_MAX_ENDGRPS	1			
-#define MAX_RUHS			8			
-#define RG_DEGREE			4			//~update
+#define MAX_RUHS		8			
+#define RG_DEGREE		64			//~update
 
 typedef struct NvmeReclaimUnit {		//update~
     uint64_t ruamw;

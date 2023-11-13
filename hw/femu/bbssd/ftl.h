@@ -152,10 +152,12 @@ struct ssdparams {
     int blks_per_line;
     int tt_lines;
 
-    int secs_per_ru;
+    int secs_per_ru;	//update~
     int pgs_per_ru;
     int blks_per_ru;
-    int tt_rus;
+	int chs_per_ru;
+	int luns_per_ru;
+    int tt_rus;			//~update
 
     int pls_per_ch;   /* # of planes per channel */
     int tt_pls;       /* total # of planes in the SSD */
@@ -234,6 +236,7 @@ struct fdp_ru_mgmt {
 	int free_ru_cnt;
 	int victim_ru_cnt;
 	int full_ru_cnt; 
+	int ii_gc_ruid;			/* recalim unit for initially isolated gc */
 };							//~update
 
 struct ssd {
@@ -245,7 +248,8 @@ struct ssd {
     struct write_pointer wp;
     struct line_mgmt lm;
 	struct fdp_ru_mgmt *rums; 	/* raclaim unit managements */			//update
-	struct ruh *ruhtbl;			/* ruh table */							//update
+	struct ruh *ruhtbl;			/* ruh table */							//update 
+	bool fdp_enabled;
 
     /* lockless ring for communication with NVMe IO thread */
     struct rte_ring **to_ftl;

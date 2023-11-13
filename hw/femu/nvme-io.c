@@ -495,7 +495,6 @@ static void nvme_do_write_fdp(FemuCtrl *n, NvmeRequest *req, uint32_t nlb) //upd
     uint16_t ph, rg, ruhid;
     NvmeReclaimUnit *ru;
 
-	printf("dtype: %d, pid(dspec): %d\n", dtype, pid);
 	/* Normal write */
     if (dtype != NVME_DIRECTIVE_DATA_PLACEMENT || !nvme_parse_pid(ns, pid, &ph, &rg))
 	{
@@ -505,8 +504,6 @@ static void nvme_do_write_fdp(FemuCtrl *n, NvmeRequest *req, uint32_t nlb) //upd
 
     ruhid = ns->fdp.phs[ph];
     ru = &ns->endgrp->fdp.ruhs[ruhid].rus[rg];
-
-	printf("rg: %d, ph: %d, ruhid: %d\n", rg, ph, ruhid);
 
     nvme_fdp_stat_inc(&ns->endgrp->fdp.hbmw, data_size);
     nvme_fdp_stat_inc(&ns->endgrp->fdp.mbmw, data_size);
