@@ -291,7 +291,7 @@ static inline void nvme_fdp_stat_inc(uint64_t *a, uint64_t b)					//update~
 
 static uint16_t nvme_io_mgmt_recv_ruhs(FemuCtrl *n, NvmeNamespace* ns, NvmeCmd *cmd, //update~
 											NvmeRequest *req, size_t len) 
-{
+{ 
 	printf("nvme_io_mgmt_recv_ruhs() called\n");
     NvmeEnduranceGroup *endgrp;
     NvmeRuhStatus *hdr;
@@ -308,28 +308,34 @@ static uint16_t nvme_io_mgmt_recv_ruhs(FemuCtrl *n, NvmeNamespace* ns, NvmeCmd *
         return NVME_INVALID_NSID | NVME_DNR;
     }
 
-	printf("here1\n");
+	printf("here0\n");
     if (!ns->endgrp->fdp.enabled) {
         return NVME_FDP_DISABLED | NVME_DNR;
     }
 
-	printf("here2\n");
+	printf("here0\n");
     endgrp = ns->endgrp;
 
+	printf("here1\n");
     nruhsd = ns->fdp.nphs * endgrp->fdp.nrg; // The number of streams in the endurance group
     trans_len = sizeof(NvmeRuhStatus) + nruhsd * sizeof(NvmeRuhStatusDescr);
     buf = g_malloc(trans_len);
 
+	printf("here2\n");
     trans_len = MIN(trans_len, len);
 
+	printf("here3\n");
     hdr = (NvmeRuhStatus *)buf; // Start Address of RUHS
     ruhsd = (NvmeRuhStatusDescr *)(buf + sizeof(NvmeRuhStatus)); // Start Address of RUHSD
 
+	printf("here4\n");
 	// header buffering
     hdr->nruhsd = cpu_to_le16(nruhsd); 
 
+	printf("here5\n");
     ruhid = ns->fdp.phs;
 
+	printf("here6\n");
 	// ruhsd buffering
     for (ph = 0; ph < ns->fdp.nphs; ph++, ruhid++) {
         NvmeRuHandle *ruh = &endgrp->fdp.ruhs[*ruhid];
@@ -344,6 +350,7 @@ static uint16_t nvme_io_mgmt_recv_ruhs(FemuCtrl *n, NvmeNamespace* ns, NvmeCmd *
         }
     }
 
+	printf("here7\n");
     return dma_read_prp(n, buf, trans_len, prp1, prp2);
 }																		//~update 
 
