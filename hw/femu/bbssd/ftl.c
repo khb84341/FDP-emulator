@@ -54,8 +54,11 @@ static uint64_t ppa2pgidx(struct ssd *ssd, struct ppa *ppa)
 
 static inline uint64_t get_rmap_ent(struct ssd *ssd, struct ppa *ppa)
 {
+	printf("re0\n");
     uint64_t pgidx = ppa2pgidx(ssd, ppa);
 
+	printf("pgidx: %ld\n", pgidx);
+	printf("re1\n");
     return ssd->rmap[pgidx];
 }
 
@@ -393,13 +396,11 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 					check_addr(ru->wp.blk, spp->blks_per_pl); 
 					/* ruh history for gc later */
 					ru->ruhid = ruhid; 
-					if (for_gc)
-					{
+					if (for_gc) {
 						rum->ii_gc_ruid = get_next_free_ruid(ssd, rum);
 						ru->for_gc = true; 
 					}
-					else
-					{
+					else {
 						/* update ruhtbl */
 						ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
 						ru->for_gc = false;
@@ -970,26 +971,45 @@ static void mark_block_free(struct ssd *ssd, struct ppa *ppa)
 
 static void gc_read_page(struct ssd *ssd, struct ppa *ppa)
 {
+	printf("r0\n");
     /* advance ssd status, we don't care about how long it takes */
     if (ssd->sp.enable_gc_delay) {
+	printf("r0\n");
         struct nand_cmd gcr;
+	printf("r1\n");
         gcr.type = GC_IO;
+	printf("r2\n");
         gcr.cmd = NAND_READ;
+	printf("r3\n");
         gcr.stime = 0;
+	printf("r4\n");
         ssd_advance_status(ssd, ppa, &gcr);
+	printf("r5\n");
     }
 }
 
 /* move valid page data (already in DRAM) from victim line to a new page */
 static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t rgid, uint16_t ruhid)
 {
+	printf("gwp0\n");
+	usleep(10000);
     struct ppa new_ppa;
+	printf("gwp1\n");
+	usleep(10000);
     struct nand_lun *new_lun;
+	printf("gwp2\n");
+	usleep(10000);
     uint64_t lpn = get_rmap_ent(ssd, old_ppa);
+	printf("gwp3\n");
+	usleep(10000);
 
     ftl_assert(valid_lpn(ssd, lpn));
 
+	printf("gwp4\n");
+	usleep(10000);
 	new_ppa = fdp_get_new_page(ssd, rgid, ruhid, true);
+	printf("gwp5\n");
+	usleep(10000);
     /* update maptbl */
 
 #ifdef FDP_DEBUG
@@ -997,15 +1017,25 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
 			new_ppa.g.ch, new_ppa.g.lun, new_ppa.g.blk, new_ppa.g.pg);
 #endif
 
+	printf("gwp6\n");
+	usleep(10000);
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
+	printf("gwp7\n");
+	usleep(10000);
     set_rmap_ent(ssd, lpn, &new_ppa);
 
+	printf("gwp8\n");
+	usleep(10000);
 	mark_page_valid(ssd, &new_ppa);
 
+	printf("gwp9\n");
+	usleep(10000);
     /* need to advance the write pointer here */
 	ssd_advance_fdp_write_pointer(ssd, rgid, ruhid, true);
 
+	printf("gwp10\n");
+	usleep(10000);
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
         gcw.type = GC_IO;
@@ -1013,6 +1043,7 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
         gcw.stime = 0;
         ssd_advance_status(ssd, &new_ppa, &gcw);
     }
+	printf("gwp11\n");
 
     /* advance per-ch gc_endtime as well */
 #if 0
@@ -1020,8 +1051,11 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
     new_ch->gc_endtime = new_ch->next_ch_avail_time;
 #endif
 
+	printf("gwp12\n");
     new_lun = get_lun(ssd, &new_ppa);
+	printf("gwp13\n");
     new_lun->gc_endtime = new_lun->next_lun_avail_time;
+	printf("gwp14\n");
 
     return 0;
 }
@@ -1125,13 +1159,22 @@ static void fdp_clean_one_block(struct ssd *ssd, struct ppa *ppa, uint16_t rgid,
 
     for (int pg = 0; pg < spp->pgs_per_blk; pg++) {
         ppa->g.pg = pg;
+	printf("old_ch: %d old_lun: %d old_pl: %d old_blk: %d old_pg: %d\n",
+			ppa->g.ch, ppa->g.lun, ppa->g.pl, ppa->g.blk, ppa->g.pg);
+	printf("c5\n");
         pg_iter = get_pg(ssd, ppa);
+		printf("pg_iter->status: %d\n", pg_iter->status);
+	printf("c6\n");
         /* there shouldn't be any free page in victim blocks */
         ftl_assert(pg_iter->status != PG_FREE);
+	printf("c7\n");
         if (pg_iter->status == PG_VALID) {
+	printf("c8\n");
             gc_read_page(ssd, ppa);
+	printf("c9\n");
             /* delay the maptbl update until "write" happens */
             fdp_gc_write_page(ssd, ppa, rgid, ruhid);
+	printf("c10\n");
             cnt++;
         }
     }
@@ -1230,8 +1273,7 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 	struct nand_lun *lunp; 
 	struct ppa ppa;
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
-	int start_ch = rgid * RG_DEGREE / spp->luns_per_ch;
-	int start_lun = rgid * RG_DEGREE % spp->luns_per_ch;
+	int start_lunidx = rgid * RG_DEGREE;
 	int ruhid;
 
 	victim_ru = select_victim_ru(ssd, force, rgid);
@@ -1239,36 +1281,39 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 		return -1;
 	}
 
+    ppa.g.blk = victim_ru->id;
+    ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
+              victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
+              ssd->lm.free_line_cnt); 
+
 #ifdef FDP_DEBUG
 	printf("victim_ru id: %d\n", victim_ru->id);
+	printf("victim_ru->ipc: %d\n", victim_ru->ipc);
+	printf("victim_ru->vpc: %d\n", victim_ru->vpc);
 #endif
 	ruhid = victim_ru->ruhid;
 	ruh = &ssd->ruhtbl[ruhid];
 
 	if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED)
 	{
-		for (int ch = start_ch; ch < start_ch + spp->chs_per_ru; ch++)
-		{
-			for (int lun = start_lun; lun < start_lun + spp->luns_per_ru; lun++)
+		for (int lunidx = start_lunidx; lunidx < start_lunidx + RG_DEGREE; lunidx++) {
+			ppa.g.ch = lunidx / spp->luns_per_ch;
+			ppa.g.lun = lunidx % spp->luns_per_ch;
+			ppa.g.pl = 0;
+			lunp = get_lun(ssd, &ppa);
+			fdp_clean_one_block(ssd, &ppa, rgid, ruhid);	//update
+			mark_block_free(ssd, &ppa);
+
+			if (spp->enable_gc_delay)
 			{
-				ppa.g.ch = ch;
-				ppa.g.lun = lun;
-				ppa.g.pl = 0;
-				lunp = get_lun(ssd, &ppa);
-				fdp_clean_one_block(ssd, &ppa, rgid, ruhid);	//update
-				mark_block_free(ssd, &ppa);
+				struct nand_cmd gce;
+				gce.type = GC_IO;
+				gce.cmd = NAND_ERASE;
+				gce.stime = 0;
+				ssd_advance_status(ssd, &ppa, &gce);
+			} 
 
-				if (spp->enable_gc_delay)
-				{
-					struct nand_cmd gce;
-					gce.type = GC_IO;
-					gce.cmd = NAND_ERASE;
-					gce.stime = 0;
-					ssd_advance_status(ssd, &ppa, &gce);
-				} 
-
-				lunp->gc_endtime = lunp->next_lun_avail_time;
-			}
+			lunp->gc_endtime = lunp->next_lun_avail_time;
 		} 
 	}
 	else	// persistently isolated
@@ -1276,8 +1321,8 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 		//TODO
 	}
 	/* reset wp of victim ru */
-	victim_ru->wp.ch = start_ch;
-	victim_ru->wp.lun = start_lun;
+	victim_ru->wp.ch = start_lunidx / spp->luns_per_ch;
+	victim_ru->wp.lun = start_lunidx % spp->luns_per_ch;
 	victim_ru->wp.pl = 0;
 	victim_ru->wp.blk = victim_ru->id;
 	victim_ru->wp.pg = 0;
@@ -1339,7 +1384,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t curlat = 0, maxlat = 0;
     int r = 0;
 
-	NvmeRwCmd *rw = (NvmeRwCmd*)&req->cmd;						//update~
+	NvmeRwCmd *rw = (NvmeRwCmd*)&req->cmd;				//update~
 	NvmeNamespace *ns = req->ns;
 	NvmeEnduranceGroup *endgrp = ns->endgrp;
 	bool fdp_enabled = endgrp->fdp.enabled;			
@@ -1349,12 +1394,13 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 	uint16_t rgif = endgrp->fdp.rgif;						
 	uint16_t rgid = pid >> (16 - rgif);
 	uint16_t ph = pid & ((1 << (15 - rgif)) - 1);
-	uint16_t ruhid = ns->fdp.phs[ph];							//~update
+	uint16_t ruhid;										//~update
 
 	if (dtype != NVME_DIRECTIVE_DATA_PLACEMENT) {
 		ph = 0;
 		rgid = 0; // TODO: consider striping later
 	}
+	ruhid = ns->fdp.phs[ph];							//~update
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
