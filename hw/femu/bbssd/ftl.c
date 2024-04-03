@@ -1,6 +1,7 @@
 #include "ftl.h"
 
 //#define FEMU_DEBUG_FTL
+#define FDP_DEBUG
 
 static void *ftl_thread(void *arg);
 
@@ -991,8 +992,10 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
 	new_ppa = fdp_get_new_page(ssd, rgid, ruhid, true);
     /* update maptbl */
 
+#ifdef FDP_DEBUG
 	printf("gc -> ch: %d, lun: %d, blk: %d, pg: %d\n", 
 			new_ppa.g.ch, new_ppa.g.lun, new_ppa.g.blk, new_ppa.g.pg);
+#endif
 
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
@@ -1035,8 +1038,10 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
 	new_ppa = get_new_page(ssd);
     /* update maptbl */
 
+#ifdef FDP_DEBUG
 	printf("ch: %d, lun: %d, blk: %d, pg: %d\n", 
 			new_ppa.g.ch, new_ppa.g.lun, new_ppa.g.blk, new_ppa.g.pg);
+#endif
 
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
@@ -1216,7 +1221,9 @@ static int do_gc(struct ssd *ssd, bool force)
 
 static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 {
+#ifdef FDP_DEBUG
 	printf("do_fdp_gc() called\n");
+#endif
 	struct ru *victim_ru = NULL;
 	struct ssdparams *spp = &ssd->sp;
 	struct ruh *ruh = NULL;
@@ -1232,7 +1239,9 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 		return -1;
 	}
 
+#ifdef FDP_DEBUG
 	printf("victim_ru id: %d\n", victim_ru->id);
+#endif
 	ruhid = victim_ru->ruhid;
 	ruh = &ssd->ruhtbl[ruhid];
 
@@ -1334,11 +1343,18 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 	NvmeNamespace *ns = req->ns;
 	NvmeEnduranceGroup *endgrp = ns->endgrp;
 	bool fdp_enabled = endgrp->fdp.enabled;			
+    uint32_t dw12 = le32_to_cpu(req->cmd.cdw12);
+    uint8_t dtype = (dw12 >> 20) & 0xf;
 	uint16_t pid = le16_to_cpu(rw->dspec);
 	uint16_t rgif = endgrp->fdp.rgif;						
 	uint16_t rgid = pid >> (16 - rgif);
 	uint16_t ph = pid & ((1 << (15 - rgif)) - 1);
-	uint16_t ruhid = ns->fdp.phs[ph];							//update~
+	uint16_t ruhid = ns->fdp.phs[ph];							//~update
+
+	if (dtype != NVME_DIRECTIVE_DATA_PLACEMENT) {
+		ph = 0;
+		rgid = 0; // TODO: consider striping later
+	}
 
     if (end_lpn >= spp->tt_pgs) {
         ftl_err("start_lpn=%"PRIu64",tt_pgs=%d\n", start_lpn, ssd->sp.tt_pgs);
@@ -1376,8 +1392,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         /* new write */
 		ppa = (fdp_enabled ? fdp_get_new_page(ssd, rgid, ruhid, false) : get_new_page(ssd));
 
+#ifdef FDP_DEBUG
 		printf("ch: %d, lun: %d, blk: %d, pg: %d\n", 
 				ppa.g.ch, ppa.g.lun, ppa.g.blk, ppa.g.pg);
+#endif
 
         /* update maptbl */
         set_maptbl_ent(ssd, lpn, &ppa);
