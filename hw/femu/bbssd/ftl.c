@@ -570,7 +570,7 @@ static void ssd_init_params(struct ssdparams *spp, FemuCtrl *n)
     spp->secs_per_ru = spp->pgs_per_ru * spp->secs_per_pg;
 	spp->chs_per_ru = RG_DEGREE / spp->luns_per_ch;
 	spp->luns_per_ru = spp->blks_per_ru;
-    spp->tt_rus = spp->blks_per_lun * (spp->tt_luns / RG_DEGREE);   //~update
+    spp->tt_rus = spp->blks_per_lun;								//~update
 	
     spp->gc_thres_pcent = n->bb_params.gc_thres_pcent/100.0;
     spp->gc_thres_lines = (int)((1 - spp->gc_thres_pcent) * spp->tt_lines);
@@ -663,6 +663,12 @@ void ssd_init(FemuCtrl *n)
     struct ssdparams *spp = &ssd->sp;
 
     ftl_assert(ssd);
+#ifdef UPDATE_FREQ
+	/*for (int i = 0; i < 4; i++)
+		for (int j = 0; j < 24; j++)
+			ssd->ten[i][j] = 0;*/
+	memset(ssd->ten, 0x00, NR_TENANTS * sizeof(struct tenant));
+#endif
 
     ssd_init_params(spp, n);
 
@@ -677,6 +683,11 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize rmap */
     ssd_init_rmap(ssd);
+
+#ifdef WAF_TEST
+	n->host_writes = 0;
+	n->gc_writes = 0;
+#endif
 
     /* initialize all the lines */
     ssd_init_lines(ssd);
@@ -1102,7 +1113,7 @@ static struct ru *select_victim_ru(struct ssd *ssd, bool force, int rgid)
     victim_ru = pqueue_peek(rum->victim_ru_pq);
     if (!victim_ru) {
         return NULL;
-    }
+    } 
 
     if (!force && victim_ru->ipc < ssd->sp.pgs_per_ru / 8) {
         return NULL;
@@ -1117,7 +1128,7 @@ static struct ru *select_victim_ru(struct ssd *ssd, bool force, int rgid)
 }
 
 /* here ppa identifies the block we want to clean */
-static void fdp_clean_one_block(struct ssd *ssd, struct ppa *ppa, uint16_t rgid, uint16_t ruhid)
+static int fdp_clean_one_block(struct ssd *ssd, struct ppa *ppa, uint16_t rgid, uint16_t ruhid)
 {
     struct ssdparams *spp = &ssd->sp;
     struct nand_page *pg_iter = NULL;
@@ -1141,6 +1152,7 @@ static void fdp_clean_one_block(struct ssd *ssd, struct ppa *ppa, uint16_t rgid,
     }
 
     ftl_assert(get_blk(ssd, ppa)->vpc == cnt);
+	return cnt;
 }
 
 /* here ppa identifies the block we want to clean */
@@ -1223,9 +1235,17 @@ static int do_gc(struct ssd *ssd, bool force)
     return 0;
 }
 
-static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
+#ifdef WAF_TEST
+bool gc = 0;
+#endif
+
+static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *req)
 {
-	printf("do_fdp_gc() called\n");
+#ifdef WAF_TEST 
+	if (!gc)
+		printf("do_fdp_gc() called\n");
+	gc = 1;
+#endif
 	struct ru *victim_ru = NULL;
 	struct ssdparams *spp = &ssd->sp;
 	struct ruh *ruh = NULL;
@@ -1234,6 +1254,8 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
 	int start_lunidx = rgid * RG_DEGREE;
 	int ruhid;
+
+	int gc_pgs = 0;
 
 	victim_ru = select_victim_ru(ssd, force, rgid);
 	if (!victim_ru) {
@@ -1262,7 +1284,7 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 			ppa.g.lun = lunidx % spp->luns_per_ch;
 			ppa.g.pl = 0;
 			lunp = get_lun(ssd, &ppa);
-			fdp_clean_one_block(ssd, &ppa, rgid, ruhid);	//update
+			gc_pgs += fdp_clean_one_block(ssd, &ppa, rgid, ruhid);	//update
 			mark_block_free(ssd, &ppa);
 
 			if (spp->enable_gc_delay)
@@ -1280,6 +1302,9 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 	else {	// persistently isolated
 		//TODO
 	}
+#ifdef WAF_TEST
+	req->ns->ctrl->gc_writes += gc_pgs * 8;
+#endif
 	/* reset wp of victim ru */
 	victim_ru->wp.ch = start_lunidx / spp->luns_per_ch;
 	victim_ru->wp.lun = start_lunidx % spp->luns_per_ch;
@@ -1295,6 +1320,7 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force)
 
 	return 0;
 }
+
 
 static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 {
@@ -1329,13 +1355,20 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
         maxlat = (sublat > maxlat) ? sublat : maxlat;
     }
 
-    return maxlat;
+#ifdef UPDATE_FREQ
+	if (lba == 1000) {
+		for (int i = 0; i < NR_TENANTS; i++)
+			for (int j = 0; j < LGROUPS_PER_TENANT; j++)
+				printf("tenant: %d lgroup: %d cnt: %d\n", i, j, ssd->ten[i].update_cnt[j]);
+	}
+#endif
+    return maxlat; 
 }
 
 static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 {
-    uint64_t lba = req->slba;
-    struct ssdparams *spp = &ssd->sp;
+	uint64_t lba = req->slba;
+	struct ssdparams *spp = &ssd->sp;
     int len = req->nlb;
     uint64_t start_lpn = lba / spp->secs_per_pg;
     uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
@@ -1354,7 +1387,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 	uint16_t rgif = endgrp->fdp.rgif;						
 	uint16_t rgid = pid >> (16 - rgif);
 	uint16_t ph = pid & ((1 << (15 - rgif)) - 1);
-	uint16_t ruhid;										//~update
+	uint16_t ruhid;										
 
 	if (dtype != NVME_DIRECTIVE_DATA_PLACEMENT) {
 		ph = 0;
@@ -1372,7 +1405,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 #ifdef FDP_DEBUG
 			printf("do_fdp_gc() called in high\n");
 #endif
-			r = do_fdp_gc(ssd, rgid, true);
+			r = do_fdp_gc(ssd, rgid, true, req);
 			if (r == -1)
 				break;
 		}
@@ -1390,6 +1423,15 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         ppa = get_maptbl_ent(ssd, lpn);
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
+#ifdef UPDATE_FREQ 
+			int tid = lpn / LPNS_PER_TENANT; 					// tenant id
+			int lgroup_offset = (lpn % (int)LPNS_PER_TENANT) / LPNS_PER_LGROUP;
+			/*
+			printf("lpn: %ld\n", lpn);
+			printf("tid: %d\n", tid);
+			printf("lgroup_offset: %d\n", lgroup_offset);*/
+			ssd->ten[tid].update_cnt[lgroup_offset]++;
+#endif
 			uint16_t old_rgid = (ppa.g.ch * spp->luns_per_ch + ppa.g.lun) / RG_DEGREE;
 			mark_page_invalid(ssd, &ppa, old_rgid);
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
@@ -1438,13 +1480,13 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
-	NvmeRwCmd *rw;			//update~
-	NvmeNamespace *ns;
-	NvmeEnduranceGroup *endgrp;
-	uint16_t pid;
-	uint16_t rgif;
-	bool fdp_enabled;
-	uint16_t rgid;
+	//NvmeRwCmd *rw;			//update~
+	//NvmeNamespace *ns;
+	//NvmeEnduranceGroup *endgrp;
+	//uint16_t pid;
+	/*uint16_t rgif;
+	bool fdp_enabled; */
+	//uint16_t rgid;			//~update
 
     while (!*(ssd->dataplane_started_ptr)) {
         usleep(100000);
@@ -1464,18 +1506,21 @@ static void *ftl_thread(void *arg)
                 printf("FEMU: FTL to_ftl dequeue failed\n");
 			}
 
-			rw = (NvmeRwCmd*)&req->cmd;			//update~
-			ns = req->ns;
-			endgrp = ns->endgrp;
-			pid = le16_to_cpu(rw->dspec);
-			rgif = endgrp->fdp.rgif;							//update~
+			//rw = (NvmeRwCmd*)&req->cmd;			//update~
+			//ns = req->ns;
+			//endgrp = ns->endgrp;
+			//pid = le16_to_cpu(rw->dspec);
+			/*rgif = endgrp->fdp.rgif;							//update~
 			fdp_enabled = endgrp->fdp.enabled;			
-			rgid = pid >> (16 - rgif);
+			rgid = pid >> (16 - rgif); */
 
 			ftl_assert(req);
 			switch (req->cmd.opcode) {
 				case NVME_CMD_WRITE:
                 lat = ssd_write(ssd, req);
+#ifdef WAF_TEST 
+				n->host_writes += req->nlb;
+#endif
                 break;
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
@@ -1496,20 +1541,21 @@ static void *ftl_thread(void *arg)
                 ftl_err("FTL to_poller enqueue failed\n");
             }
 
-            /* clean one line if needed (in the background) */
+            /* clean one ru if needed (in the background) */
+			/*
 			if (fdp_enabled) {
 				if (should_fdp_gc(ssd, rgid)) {
 #ifdef FDP_DEBUG
 					printf("do_fdp_gc() called in normal\n");
 #endif
-					do_fdp_gc(ssd, rgid, false);
+					do_fdp_gc(ssd, rgid, false, req);
 				} 
 			}
 			else {
 				if (should_gc(ssd)) {
 					do_gc(ssd, false);
 				}
-			}
+			}*/
         }
     }
 
