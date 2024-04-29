@@ -9,6 +9,7 @@
 
 
 //#define UPDATE_FREQ
+#define DEVICE_UTIL_DEBUG
 
 #ifdef UPDATE_FREQ 
 #define NR_TENANTS (2)
@@ -56,6 +57,11 @@ enum {
     FEMU_DISABLE_LOG = 7,
 };
 
+enum {						// update~
+	RU_TYPE_NORMAL = 0,
+	RU_TYPE_II_GC = 1,
+	RU_TYPE_PI_GC = 2,
+};							// ~update
 
 #define BLK_BITS    (16)
 #define PG_BITS     (16)
@@ -154,6 +160,9 @@ struct ssdparams {
     int pgs_per_lun;  /* # of pages per LUN (Die) */
     int pgs_per_ch;   /* # of pages per channel */
     int tt_pgs;       /* total # of pages in the SSD */
+#ifdef DEVICE_UTIL_DEBUG
+	int tt_valid_pgs;	
+#endif
 
     int blks_per_lun; /* # of blocks per LUN */
     int blks_per_ch;  /* # of blocks per channel */
@@ -230,12 +239,13 @@ typedef struct ru {			//update~
 	QTAILQ_ENTRY(ru) entry;		/* in either {free, victim, full} list */
 	size_t pos;					/* position in the priority queue for victim ru */
 	int ruhid;					/* needed for gc */
-	bool for_gc;				/* used only for gc */
+	int rut;					/* ru type: normal, ii_gc, pi_gc */
 } ru; 					
 
 struct ruh {				
-	int ruht;
+	int ruht;					/* ruh type: ii_gc, pi_gc */
 	int* cur_ruids;
+	int* pi_gc_ruids;
 };						
 
 struct fdp_ru_mgmt {	

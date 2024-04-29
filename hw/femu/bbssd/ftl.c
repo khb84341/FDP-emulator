@@ -159,11 +159,10 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 	int blkoff;
 	
 	ssd->rums = g_malloc(sizeof(struct fdp_ru_mgmt) * nrg);
-	for (int i = 0; i < nrg; i++)
-	{
+	for (int i = 0; i < nrg; i++) {
 		rum = &ssd->rums[i];
-		rum->tt_rus = spp->blks_per_pl;
-		assert(rum->tt_rus == spp->blks_per_pl);
+		rum->tt_rus = spp->blks_per_lun;
+		assert(rum->tt_rus == spp->blks_per_lun);
 		rum->rus = g_malloc0(sizeof(struct ru) * rum->tt_rus);
 
 		QTAILQ_INIT(&rum->free_ru_list);
@@ -174,8 +173,7 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 
 		rum->free_ru_cnt = 0;
 
-		for (int j = 0; j < rum->tt_rus; j++)
-		{ 
+		for (int j = 0; j < rum->tt_rus; j++) {
 			ru = &rum->rus[j];
 			ru->id = j;
 			ru->wp.ch = i * RG_DEGREE / spp->luns_per_ch;
@@ -186,15 +184,14 @@ static void ssd_init_fdp_ru_mgmts(struct ssd *ssd) 		//update~
 			ru->ipc = 0;
 			ru->vpc = 0;
 			ru->pos = 0; 
-			ru->for_gc = false;
+			ru->rut = RU_TYPE_NORMAL;
 			/* ruh history for gc */	
 			if (j < MAX_RUHS)
 				ru->ruhid = j;
 
 			blkoff = j % spp->blks_per_pl;
 			//ru->blks = gmalloc0(sizeof(struct nand_block*) * RG_DEGREE); 
-			for (int k = 0; k < RG_DEGREE; k++)
-			{
+			for (int k = 0; k < RG_DEGREE; k++) {
 				int cur_ch = ru->wp.ch + k / spp->luns_per_ch;
 				int cur_lun = (ru->wp.lun + k) % spp->luns_per_ch;
 
@@ -241,24 +238,46 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 
 	ssd->fdp_enabled = endgrp->fdp.enabled;
 	ssd->ruhtbl = g_malloc0(sizeof(struct ruh) * endgrp->fdp.nruh); 
-	for (int i = 0; i < endgrp->fdp.nruh; i++)
-	{
+	for (int i = 0; i < endgrp->fdp.nruh; i++) {
 		ruh = &ssd->ruhtbl[i];
 		ruh->ruht = endgrp->fdp.ruhs[i].ruht;
 		ruh->cur_ruids = g_malloc0(sizeof(int) * endgrp->fdp.nrg);
-		for (int j = 0; j < endgrp->fdp.nrg; j++) 
-		{
+		ruh->pi_gc_ruids = g_malloc0(sizeof(int) * endgrp->fdp.nrg);
+		for (int j = 0; j < endgrp->fdp.nrg; j++)  {
 			rum = &ssd->rums[j];
 			ruh->cur_ruids[j] = get_next_free_ruid(ssd, rum);
 		} 
 	} 
 
 	/* reserve one ru for initially isolated gc */
-	for (int i = 0; i < endgrp->fdp.nrg; i++)
-	{
+	for (int i = 0; i < endgrp->fdp.nrg; i++) {
 		rum = &ssd->rums[i];
 		rum->ii_gc_ruid = get_next_free_ruid(ssd, rum);
+		rum->rus[rum->ii_gc_ruid].rut = RU_TYPE_II_GC;
 	}
+
+	/* reserve rus for persistently isolated gc */
+	/*
+	for (int i = 0; i < endgrp->fdp.nrg; i++) {
+		int pi_gc_ruid;
+		rum = &ssd->rums[i];
+
+		pi_gc_ruid = get_next_free_ruid(ssd, rum);
+		ssd->ruhtbl[0].pi_gc_ruids[i] = pi_gc_ruid;
+		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
+
+		pi_gc_ruid = get_next_free_ruid(ssd, rum);
+		ssd->ruhtbl[1].pi_gc_ruids[i] = pi_gc_ruid;
+		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
+
+		pi_gc_ruid = get_next_free_ruid(ssd, rum);
+		ssd->ruhtbl[2].pi_gc_ruids[i] = pi_gc_ruid;
+		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
+
+		pi_gc_ruid = get_next_free_ruid(ssd, rum);
+		ssd->ruhtbl[3].pi_gc_ruids[i] = pi_gc_ruid;
+		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
+	}*/ 
 }																		//~update
 
 static void ssd_init_write_pointer(struct ssd *ssd)
@@ -355,18 +374,30 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
     }
 }
 
-static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16_t ruhid, bool for_gc)//update
+// #define SMALL_RG
+static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16_t ruhid, bool for_gc) //update~
 {
 	struct ssdparams *spp = &ssd->sp;
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
 	struct ruh *ruh = &ssd->ruhtbl[ruhid];
 	int max_ch = (rgid + 1) * (RG_DEGREE / spp->luns_per_ch);
-	int ruid = (!for_gc ? ruh->cur_ruids[rgid] : rum->ii_gc_ruid);
-	struct ru *ru = &rum->rus[ruid];
+	int ruid;
+	struct ru *ru = NULL;
+	if (for_gc) {
+		if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED)
+			ruid = rum->ii_gc_ruid;
+		else
+			ruid = ruh->pi_gc_ruids[rgid];
+	}
+	else
+		ruid = ruh->cur_ruids[rgid];
+	ru = &rum->rus[ruid]; 
 
 	/* Case that an RG has more than two channels -> same with the origin */
+#ifdef SMALL_RG
 	if (RG_DEGREE > spp->luns_per_ch)
 	{ 
+#endif
 		check_addr(ru->wp.ch, max_ch);
 		ru->wp.ch++;
 		if (ru->wp.ch == max_ch) {
@@ -397,14 +428,18 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 					check_addr(ru->wp.blk, spp->blks_per_pl); 
 					/* ruh history for gc later */
 					ru->ruhid = ruhid; 
-					if (for_gc) {
+					if (ru->rut == RU_TYPE_II_GC) {
 						rum->ii_gc_ruid = get_next_free_ruid(ssd, rum);
-						ru->for_gc = true; 
+						rum->rus[rum->ii_gc_ruid].rut = RU_TYPE_II_GC;
+					}
+					else if (ru->rut == RU_TYPE_PI_GC) {
+						ruh->pi_gc_ruids[rgid] = get_next_free_ruid(ssd, rum);
+						rum->rus[ruh->pi_gc_ruids[rgid]].rut = RU_TYPE_PI_GC;
 					}
 					else {
 						/* update ruhtbl */
 						ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
-						ru->for_gc = false;
+						rum->rus[ruh->cur_ruids[rgid]].rut = RU_TYPE_NORMAL;
 					} 
 					check_addr(ru->wp.blk, spp->blks_per_pl);
 					/* make sure we are starting from page 0 in the ru */
@@ -416,8 +451,11 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 				}
 			}
 		} 
+#ifdef SMALL_RG
 	} 
+#endif
 
+#ifdef SMALL_RG
 	/* Case that an RG is included in one channel */
 	else 
 	{
@@ -450,15 +488,20 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 				}
 				/* current ru is used up, pick another empty ru */ 
 				ru->ruhid = ruhid;
-				if (for_gc) {
+				if (ru->rut == RU_TYPE_II_GC) {
 					rum->ii_gc_ruid = get_next_free_ruid(ssd, rum);
-					ru->for_gc = true; 
-				} 
+					rum->rus[rum->ii_gc_ruid].rut = RU_TYPE_II_GC;
+				}
+				else if (ru->rut == RU_TYPE_PI_GC) {
+					ruh->pi_gc_ruids[rgid] = get_next_free_ruid(ssd, rum);
+					rum->rus[ruh->pi_gc_ruids[rgid]].rut = RU_TYPE_PI_GC;
+				}
 				else {
 					/* update ruhtbl */
 					ruh->cur_ruids[rgid] = get_next_free_ruid(ssd, rum);
-					ru->for_gc = false; 
-				}
+					rum->rus[ruh->cur_ruids[rgid]].rut = RU_TYPE_NORMAL;
+				} 
+				check_addr(ru->wp.blk, spp->blks_per_pl);
 				/* make sure we are starting from page 0 in the ru */
 				ftl_assert(ru->wp.pg == 0);
 				ftl_assert(ru->wp.lun == 0);
@@ -467,17 +510,25 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 			}
 		}
 	}
-}																					//~update
+#endif
+}																					
 
 static struct ppa fdp_get_new_page(struct ssd *ssd, uint16_t rgid, uint16_t ruhid, bool for_gc)
 {
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
 	struct ruh* ruh = &ssd->ruhtbl[ruhid];
+	int ruid;
 	struct ru *ru;
     struct ppa ppa; 
+	if (for_gc) {
+		if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED)
+			ruid = rum->ii_gc_ruid;
+		else
+			ruid = ruh->pi_gc_ruids[rgid];
+	}
+	else // normal
+		ruid = ruh->cur_ruids[rgid];
 	
-	int ruid = (!for_gc ? ruh->cur_ruids[rgid] : rum->ii_gc_ruid);
-
 	ppa.ppa = 0;
 
 	rum = &ssd->rums[rgid];
@@ -491,7 +542,7 @@ static struct ppa fdp_get_new_page(struct ssd *ssd, uint16_t rgid, uint16_t ruhi
     ftl_assert(ppa.g.pl == 0);
 
     return ppa;
-}
+}																		//~update
 
 static struct ppa get_new_page(struct ssd *ssd)
 {
@@ -549,6 +600,9 @@ static void ssd_init_params(struct ssdparams *spp, FemuCtrl *n)
     spp->pgs_per_lun = spp->pgs_per_pl * spp->pls_per_lun;
     spp->pgs_per_ch = spp->pgs_per_lun * spp->luns_per_ch;
     spp->tt_pgs = spp->pgs_per_ch * spp->nchs;
+#ifdef DEVICE_UTIL_DEBUG
+	spp->tt_valid_pgs = 0; //update
+#endif
 
     spp->blks_per_lun = spp->blks_per_pl * spp->pls_per_lun;
     spp->blks_per_ch = spp->blks_per_lun * spp->luns_per_ch;
@@ -1004,8 +1058,8 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
     /* update maptbl */
 
 #ifdef FDP_DEBUG
-	printf("gc -> new ch: %d, new lun: %d, new blk: %d, new pg: %d\n", 
-			new_ppa.g.ch, new_ppa.g.lun, new_ppa.g.blk, new_ppa.g.pg);
+	printf("gc -> rgid: %d ruhid: %d new ch: %d new lun: %d new blk: %d new pg: %d\n", 
+			rgid, ruhid, new_ppa.g.ch, new_ppa.g.lun, new_ppa.g.blk, new_ppa.g.pg);
 #endif
 
     set_maptbl_ent(ssd, lpn, &new_ppa);
@@ -1235,20 +1289,15 @@ static int do_gc(struct ssd *ssd, bool force)
     return 0;
 }
 
-#ifdef WAF_TEST
-bool gc = 0;
-#endif
-
+bool gc = 0; 
 static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *req)
 {
-#ifdef WAF_TEST 
 	if (!gc)
 		printf("do_fdp_gc() called\n");
 	gc = 1;
-#endif
+
 	struct ru *victim_ru = NULL;
 	struct ssdparams *spp = &ssd->sp;
-	struct ruh *ruh = NULL;
 	struct nand_lun *lunp; 
 	struct ppa ppa;
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
@@ -1264,7 +1313,6 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *re
 
     ppa.g.blk = victim_ru->id;
 	ruhid = victim_ru->ruhid; 
-	ruh = &ssd->ruhtbl[ruhid]; 
 
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
@@ -1278,32 +1326,30 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *re
 	printf("victim_ru->vpc: %d\n", victim_ru->vpc);
 #endif 
 
-	if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED) {
-		for (int lunidx = start_lunidx; lunidx < start_lunidx + RG_DEGREE; lunidx++) {
-			ppa.g.ch = lunidx / spp->luns_per_ch;
-			ppa.g.lun = lunidx % spp->luns_per_ch;
-			ppa.g.pl = 0;
-			lunp = get_lun(ssd, &ppa);
-			gc_pgs += fdp_clean_one_block(ssd, &ppa, rgid, ruhid);	//update
-			mark_block_free(ssd, &ppa);
+	for (int lunidx = start_lunidx; lunidx < start_lunidx + RG_DEGREE; lunidx++) {
+		ppa.g.ch = lunidx / spp->luns_per_ch;
+		ppa.g.lun = lunidx % spp->luns_per_ch;
+		ppa.g.pl = 0;
+		lunp = get_lun(ssd, &ppa);
+		gc_pgs += fdp_clean_one_block(ssd, &ppa, rgid, ruhid);	//update
+		mark_block_free(ssd, &ppa);
 
-			if (spp->enable_gc_delay)
-			{
-				struct nand_cmd gce;
-				gce.type = GC_IO;
-				gce.cmd = NAND_ERASE;
-				gce.stime = 0;
-				ssd_advance_status(ssd, &ppa, &gce);
-			} 
-
-			lunp->gc_endtime = lunp->next_lun_avail_time;
+		if (spp->enable_gc_delay)
+		{
+			struct nand_cmd gce;
+			gce.type = GC_IO;
+			gce.cmd = NAND_ERASE;
+			gce.stime = 0;
+			ssd_advance_status(ssd, &ppa, &gce);
 		} 
-	}
-	else {	// persistently isolated
-		//TODO
-	}
+
+		lunp->gc_endtime = lunp->next_lun_avail_time;
+	} 
 #ifdef WAF_TEST
 	req->ns->ctrl->gc_writes += gc_pgs * 8;
+#endif
+#ifdef DEVICE_UTIL_DEBUG
+	spp->tt_valid_pgs += gc_pgs;
 #endif
 	/* reset wp of victim ru */
 	victim_ru->wp.ch = start_lunidx / spp->luns_per_ch;
@@ -1362,6 +1408,10 @@ static uint64_t ssd_read(struct ssd *ssd, NvmeRequest *req)
 				printf("tenant: %d lgroup: %d cnt: %d\n", i, j, ssd->ten[i].update_cnt[j]);
 	}
 #endif
+#ifdef DEVICE_UTIL_DEBUG
+	if (lba == 2000) 
+		printf("util: %lf\n", (double) spp->tt_valid_pgs / spp->tt_pgs);
+#endif
     return maxlat; 
 }
 
@@ -1405,7 +1455,11 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 #ifdef FDP_DEBUG
 			printf("do_fdp_gc() called in high\n");
 #endif
+			spp->tt_valid_pgs -= spp->pgs_per_ru;
 			r = do_fdp_gc(ssd, rgid, true, req);
+			ftl_assert(spp->tt_valid_pgs >= 0);
+#ifdef DEVICE_UTIL_DEBUG
+#endif
 			if (r == -1)
 				break;
 		}
@@ -1451,6 +1505,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         set_rmap_ent(ssd, lpn, &ppa);
 
         mark_page_valid(ssd, &ppa);
+#ifdef DEVICE_UTIL_DEBUG
+		spp->tt_valid_pgs += 1;
+		ftl_assert(spp->tt_valid_pgs <= spp->tt_pgs);
+#endif
 
         /* need to advance the write pointer here */
 		if (fdp_enabled)  {
