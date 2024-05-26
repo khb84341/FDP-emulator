@@ -84,6 +84,7 @@ static void nvme_process_sq_io(void *opaque, int index_poller)
             /* Normal I/Os that don't need delay emulation */
             req->status = status;
         } else {
+			printf("status: %x\n", status);
             femu_err("Error IO processed!\n");
         }
 
@@ -303,39 +304,30 @@ static uint16_t nvme_io_mgmt_recv_ruhs(FemuCtrl *n, NvmeNamespace* ns, NvmeCmd *
 	uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1); //update
 	uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2); //update
 
-	printf("here0\n");
-    if (ns->id == 0 || ns->id == 0xffffffff) {
-        return NVME_INVALID_NSID | NVME_DNR;
+	if (ns->id == 0 || ns->id == 0xffffffff) {
+		return NVME_INVALID_NSID | NVME_DNR;
     }
 
-	printf("here0\n");
     if (!ns->endgrp->fdp.enabled) {
         return NVME_FDP_DISABLED | NVME_DNR;
     }
 
-	printf("here0\n");
     endgrp = ns->endgrp;
 
-	printf("here1\n");
     nruhsd = ns->fdp.nphs * endgrp->fdp.nrg; // The number of streams in the endurance group
     trans_len = sizeof(NvmeRuhStatus) + nruhsd * sizeof(NvmeRuhStatusDescr);
     buf = g_malloc(trans_len);
 
-	printf("here2\n");
     trans_len = MIN(trans_len, len);
 
-	printf("here3\n");
     hdr = (NvmeRuhStatus *)buf; // Start Address of RUHS
     ruhsd = (NvmeRuhStatusDescr *)(buf + sizeof(NvmeRuhStatus)); // Start Address of RUHSD
 
-	printf("here4\n");
 	// header buffering
     hdr->nruhsd = cpu_to_le16(nruhsd); 
 
-	printf("here5\n");
     ruhid = ns->fdp.phs;
 
-	printf("here6\n");
 	// ruhsd buffering
     for (ph = 0; ph < ns->fdp.nphs; ph++, ruhid++) {
         NvmeRuHandle *ruh = &endgrp->fdp.ruhs[*ruhid];
@@ -350,7 +342,6 @@ static uint16_t nvme_io_mgmt_recv_ruhs(FemuCtrl *n, NvmeNamespace* ns, NvmeCmd *
         }
     }
 
-	printf("here7\n");
     return dma_read_prp(n, buf, trans_len, prp1, prp2);
 }																		//~update 
 
@@ -361,6 +352,7 @@ static uint16_t nvme_io_mgmt_recv(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     uint32_t numd = le32_to_cpu(cmd->cdw11);
     uint8_t mo = (cdw10 & 0xff); // Management operation
     size_t len = (numd + 1) << 2; // unit: byte
+	printf("mo: %d\n", mo);
 
     switch (mo) {
     case NVME_IOMR_MO_NOP:

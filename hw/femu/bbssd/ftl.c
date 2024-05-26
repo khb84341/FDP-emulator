@@ -375,7 +375,7 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
 }
 
 // #define SMALL_RG
-static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16_t ruhid, bool for_gc) //update~
+static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, int lpn, uint16_t ruhid, bool for_gc) //update~
 {
 	struct ssdparams *spp = &ssd->sp;
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
@@ -385,12 +385,21 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 	struct ru *ru = NULL;
 	if (for_gc) {
 		if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED)
-			ruid = rum->ii_gc_ruid;
-		else
+			ruid = rum->ii_gc_ruid; 
+		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED)
 			ruid = ruh->pi_gc_ruids[rgid];
+		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED_NO_SEPARATED_BLK)
+			ruid = ruh->cur_ruids[rgid];
+		else {
+			if (ssd->gc_cnt[lpn] == 0)
+				ruid = ruh->pi_gc_ruids[rgid];
+			else 
+				ruid = rum->ii_gc_ruid;
+		}
 	}
 	else
 		ruid = ruh->cur_ruids[rgid];
+
 	ru = &rum->rus[ruid]; 
 
 	/* Case that an RG has more than two channels -> same with the origin */
@@ -513,7 +522,8 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, uint16
 #endif
 }																					
 
-static struct ppa fdp_get_new_page(struct ssd *ssd, uint16_t rgid, uint16_t ruhid, bool for_gc)
+static struct ppa fdp_get_new_page(struct ssd *ssd, uint16_t rgid, 
+		int lpn, uint16_t ruhid, bool for_gc) //update
 {
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
 	struct ruh* ruh = &ssd->ruhtbl[ruhid];
@@ -523,12 +533,21 @@ static struct ppa fdp_get_new_page(struct ssd *ssd, uint16_t rgid, uint16_t ruhi
 	if (for_gc) {
 		if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED)
 			ruid = rum->ii_gc_ruid;
-		else
+		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED)
 			ruid = ruh->pi_gc_ruids[rgid];
+		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED_NO_SEPARATED_BLK) {
+			ruid = ruh->cur_ruids[rgid];
+		}
+		else { 
+			if (ssd->gc_cnt[lpn] == 0)
+				ruid = ruh->pi_gc_ruids[rgid];
+			else 
+				ruid = rum->ii_gc_ruid;
+		}
 	}
 	else // normal
 		ruid = ruh->cur_ruids[rgid];
-	
+
 	ppa.ppa = 0;
 
 	rum = &ssd->rums[rgid];
@@ -730,7 +749,7 @@ void ssd_init(FemuCtrl *n)
     ssd->ch = g_malloc0(sizeof(struct ssd_channel) * spp->nchs);
     for (int i = 0; i < spp->nchs; i++) {
         ssd_init_ch(&ssd->ch[i], spp);
-    }
+    } 
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
@@ -742,6 +761,8 @@ void ssd_init(FemuCtrl *n)
 	n->host_writes = 0;
 	n->gc_writes = 0;
 #endif
+
+	ssd->gc_cnt = g_malloc0(sizeof(int) * spp->tt_pgs);  // update
 
     /* initialize all the lines */
     ssd_init_lines(ssd);
@@ -1054,7 +1075,7 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
 
     ftl_assert(valid_lpn(ssd, lpn));
 
-	new_ppa = fdp_get_new_page(ssd, rgid, ruhid, true);
+	new_ppa = fdp_get_new_page(ssd, rgid, lpn, ruhid, true);
     /* update maptbl */
 
 #ifdef FDP_DEBUG
@@ -1069,8 +1090,10 @@ static uint64_t fdp_gc_write_page(struct ssd *ssd, struct ppa *old_ppa, uint16_t
 	mark_page_valid(ssd, &new_ppa);
 
     /* need to advance the write pointer here */
-	ssd_advance_fdp_write_pointer(ssd, rgid, ruhid, true);
+	ssd_advance_fdp_write_pointer(ssd, rgid, lpn, ruhid, true);
 
+	ssd->gc_cnt[lpn]++;
+	
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
         gcw.type = GC_IO;
@@ -1487,12 +1510,13 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 			ssd->ten[tid].update_cnt[lgroup_offset]++;
 #endif
 			uint16_t old_rgid = (ppa.g.ch * spp->luns_per_ch + ppa.g.lun) / RG_DEGREE;
-			mark_page_invalid(ssd, &ppa, old_rgid);
+			mark_page_invalid(ssd, &ppa, old_rgid); 
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
+			ssd->gc_cnt = 0;
         }
 
         /* new write */
-		ppa = (fdp_enabled ? fdp_get_new_page(ssd, rgid, ruhid, false) : get_new_page(ssd));
+		ppa = (fdp_enabled ? fdp_get_new_page(ssd, rgid, 0, ruhid, false) : get_new_page(ssd));
 
 #ifdef FDP_DEBUG
 		printf("pid: %10d lpn: %10ld rgid: %5d ruhid: %5d ch: %5d, lun: %5d, blk: %5d, pg: %5d\n", 
@@ -1512,7 +1536,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
         /* need to advance the write pointer here */
 		if (fdp_enabled)  {
-			ssd_advance_fdp_write_pointer(ssd, rgid, ruhid, false);
+			ssd_advance_fdp_write_pointer(ssd, rgid, 0, ruhid, false);
 		}
 		else
 			ssd_advance_write_pointer(ssd);

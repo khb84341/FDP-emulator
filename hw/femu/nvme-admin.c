@@ -814,8 +814,16 @@ static uint16_t nvme_error_log_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
     return dma_read_prp(n, (uint8_t *)n->elpes, trans_len, prp1, prp2);
 }
 
+/* for gc stat */
 static uint16_t nvme_smart_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
-{
+{ 
+#ifdef WAF_TEST
+	/*printf("n->host_writes: %ld\n", n->host_writes);
+	printf("n->gc_writes: %ld\n", n->gc_writes); */
+	printf("WAF: %lf\n", (double)(n->host_writes + n->gc_writes) / n->host_writes); 
+#endif
+	return NVME_SUCCESS; 
+	/*
     uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1);
     uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2);
 
@@ -848,7 +856,7 @@ static uint16_t nvme_smart_info(FemuCtrl *n, NvmeCmd *cmd, uint32_t buf_len)
 
     n->aer_mask &= ~(1 << NVME_AER_TYPE_SMART);
 
-    return dma_read_prp(n, (uint8_t *)&smart, trans_len, prp1, prp2);
+    return dma_read_prp(n, (uint8_t *)&smart, trans_len, prp1, prp2);*/
 }
 
 static uint16_t nvme_cmd_effects(FemuCtrl *n, NvmeCmd *cmd, uint8_t csi,

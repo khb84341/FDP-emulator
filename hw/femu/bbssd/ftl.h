@@ -277,6 +277,7 @@ struct ssd {
     struct line_mgmt lm;
 	struct fdp_ru_mgmt *rums; 	/* raclaim unit managements */			//update
 	struct ruh *ruhtbl;			/* ruh table */							//update 
+	int *gc_cnt;				/* for two-level isolation gc */		//update
 	bool fdp_enabled;
 
 #ifdef UPDATE_FREQ

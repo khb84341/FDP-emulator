@@ -35,8 +35,9 @@
 #define NVME_FDP_MAXPIDS 	128			
 #define NVME_MAX_NAMESPACES 1			
 #define NVME_MAX_ENDGRPS	1			
-#define MAX_RUHS		8			
-#define RG_DEGREE		32			//~update
+#define MAX_RUHS			4
+#define RG_DEGREE			64			//~update
+#define WAF_TEST
 
 typedef struct NvmeReclaimUnit {		//update~
     uint64_t ruamw;
@@ -1332,6 +1333,11 @@ typedef struct FemuCtrl {
     MemoryRegion    ctrl_mem;
     NvmeBar         bar;
 
+#ifdef WAF_TEST
+	uint64_t host_writes;
+	uint64_t gc_writes;
+#endif
+
     /* Coperd: ZNS FIXME */
     QemuUUID        uuid;
     uint32_t        zasl_bs;
@@ -1580,6 +1586,8 @@ typedef struct QEMU_PACKED NvmeFdpDescrHdr {
 enum NvmeRuhType {
     NVME_RUHT_INITIALLY_ISOLATED = 1,
     NVME_RUHT_PERSISTENTLY_ISOLATED = 2,
+    NVME_RUHT_PERSISTENTLY_ISOLATED_NO_SEPARATED_BLK = 3,
+    NVME_RUHT_TWO_LEVEL_ISOLATION = 4,
 };
 
 typedef struct QEMU_PACKED NvmeRuhDescr {
