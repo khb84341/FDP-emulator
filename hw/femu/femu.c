@@ -391,7 +391,8 @@ static int nvme_init_endgrps(FemuCtrl *n, Error **errp) 				//update~
 		{
 			endgrp->fdp.ruhs[ruhid] = (NvmeRuHandle)
 			{
-				.ruht = NVME_RUHT_INITIALLY_ISOLATED, 				
+				//.ruht = NVME_RUHT_INITIALLY_ISOLATED, 				
+    			.ruht = NVME_RUHT_TWO_LEVEL_ISOLATION,
 				.ruha = NVME_RUHA_HOST,
 				.ruamw = endgrp->fdp.runs >> data_shift,
 				.lbafi = lba_index,
@@ -406,11 +407,9 @@ static int nvme_init_endgrps(FemuCtrl *n, Error **errp) 				//update~
 		/* TODO: Persistently_Isolated */
 
 		/* determine the ruhs using persistently isolated GC in this part */ 
-		/*
-		endgrp->fdp.ruhs[0].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED;
-		endgrp->fdp.ruhs[1].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED;
-		endgrp->fdp.ruhs[2].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED;
-		endgrp->fdp.ruhs[3].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED;*/
+		
+		for (int ruhid = 0; ruhid < MAX_RUHS; ruhid++) 
+			endgrp->fdp.ruhs[i].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED;
 
 		endgrp->fdp.enabled = true; 
     }

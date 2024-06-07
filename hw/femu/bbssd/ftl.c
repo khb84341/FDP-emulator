@@ -257,27 +257,17 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 	}
 
 	/* reserve rus for persistently isolated gc */
-	/*
+	
 	for (int i = 0; i < endgrp->fdp.nrg; i++) {
 		int pi_gc_ruid;
-		rum = &ssd->rums[i];
-
-		pi_gc_ruid = get_next_free_ruid(ssd, rum);
-		ssd->ruhtbl[0].pi_gc_ruids[i] = pi_gc_ruid;
-		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
-
-		pi_gc_ruid = get_next_free_ruid(ssd, rum);
-		ssd->ruhtbl[1].pi_gc_ruids[i] = pi_gc_ruid;
-		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
-
-		pi_gc_ruid = get_next_free_ruid(ssd, rum);
-		ssd->ruhtbl[2].pi_gc_ruids[i] = pi_gc_ruid;
-		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
-
-		pi_gc_ruid = get_next_free_ruid(ssd, rum);
-		ssd->ruhtbl[3].pi_gc_ruids[i] = pi_gc_ruid;
-		rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
-	}*/ 
+		rum = &ssd->rums[i]; 
+		
+		for (int j = 0; j < MAX_RUHS; j++) {
+			pi_gc_ruid = get_next_free_ruid(ssd, rum);
+			ssd->ruhtbl[j].pi_gc_ruids[i] = pi_gc_ruid;
+			rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
+		} 
+	}
 }																		//~update
 
 static void ssd_init_write_pointer(struct ssd *ssd)
@@ -384,10 +374,12 @@ static void ssd_advance_fdp_write_pointer(struct ssd *ssd, uint16_t rgid, int lp
 	int ruid;
 	struct ru *ru = NULL;
 	if (for_gc) {
-		if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED)
+		if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED) {
 			ruid = rum->ii_gc_ruid; 
-		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED)
+		}
+		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED) {
 			ruid = ruh->pi_gc_ruids[rgid];
+		}
 		else if (ruh->ruht == NVME_RUHT_PERSISTENTLY_ISOLATED_NO_SEPARATED_BLK)
 			ruid = ruh->cur_ruids[rgid];
 		else {
@@ -1512,7 +1504,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 			uint16_t old_rgid = (ppa.g.ch * spp->luns_per_ch + ppa.g.lun) / RG_DEGREE;
 			mark_page_invalid(ssd, &ppa, old_rgid); 
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
-			ssd->gc_cnt = 0;
+			ssd->gc_cnt[lpn] = 0;
         }
 
         /* new write */
