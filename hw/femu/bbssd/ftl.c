@@ -257,7 +257,9 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 	}
 
 	/* reserve rus for persistently isolated gc */
+	/* FIXME: if you want to set the ruhs as PI, activate the code below */
 	
+	/*
 	for (int i = 0; i < endgrp->fdp.nrg; i++) {
 		int pi_gc_ruid;
 		rum = &ssd->rums[i]; 
@@ -267,7 +269,7 @@ static void ssd_init_fdp_ruhtbl(struct FemuCtrl *n, struct ssd *ssd) 	//update~
 			ssd->ruhtbl[j].pi_gc_ruids[i] = pi_gc_ruid;
 			rum->rus[pi_gc_ruid].rut = RU_TYPE_PI_GC;
 		} 
-	}
+	} */
 }																		//~update
 
 static void ssd_init_write_pointer(struct ssd *ssd)
@@ -1316,8 +1318,11 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *re
 	struct nand_lun *lunp; 
 	struct ppa ppa;
 	struct fdp_ru_mgmt *rum = &ssd->rums[rgid];
+	NvmeRuHandle *ruh;
+	NvmeFdpEvent *e = NULL;
+	NvmeNamespace *ns = req->ns;
 	int start_lunidx = rgid * RG_DEGREE;
-	int ruhid;
+	uint16_t ruhid;
 
 	int gc_pgs = 0;
 
@@ -1328,6 +1333,7 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *re
 
     ppa.g.blk = victim_ru->id;
 	ruhid = victim_ru->ruhid; 
+	ruh = &ns->endgrp->fdp.ruhs[ruhid];	
 
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
               victim_line->ipc, ssd->lm.victim_line_cnt, ssd->lm.full_line_cnt,
@@ -1360,6 +1366,23 @@ static int do_fdp_gc(struct ssd *ssd, uint16_t rgid, bool force, NvmeRequest *re
 
 		lunp->gc_endtime = lunp->next_lun_avail_time;
 	} 
+
+	if (ruh->ruht == NVME_RUHT_INITIALLY_ISOLATED && log_event(ruh, FDP_EVT_MEDIA_REALLOC)) {
+		printf("here0\n");
+		struct nvme_fdp_event_realloc mr;
+		e = nvme_fdp_alloc_event(req->ns->ctrl, &ns->endgrp->fdp.ctrl_events);
+		e->type = FDP_EVT_MEDIA_REALLOC;
+		e->flags = FDPEF_PIV | FDPEF_NSIDV | FDPEF_LV;
+		e->pid = cpu_to_le16(ruhid);
+		e->nsid = cpu_to_le32(ns->id);
+		mr.flags = 1 << 0; // LIV on
+		mr.nlbam = gc_pgs * 8;
+		mr.lba = 0; // TODO
+		memcpy(e->type_specific, &mr, sizeof(mr));
+		e->rgid = cpu_to_le16(rgid);
+		e->ruhid = cpu_to_le16(ruhid);
+	}
+
 #ifdef WAF_TEST
 	req->ns->ctrl->gc_writes += gc_pgs * 8;
 #endif

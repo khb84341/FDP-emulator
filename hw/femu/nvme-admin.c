@@ -954,7 +954,8 @@ static uint16_t nvme_fdp_confs(FemuCtrl *n, NvmeCmd *cmd, uint32_t endgrpid,
     if (endgrp->fdp.enabled) {
         /* hdr->fdpa = FIELD_DP8(hdr->fdpa, FDPA, VALID, 1); //TODO
         hdr->fdpa = FIELD_DP8(hdr->fdpa, FDPA, RGIF, endgrp->fdp.rgif); */
-        hdr->nrg = cpu_to_le16(endgrp->fdp.nrg);
+        hdr->fdpa = cpu_to_le16(endgrp->fdp.fdpa);
+        hdr->nrg = cpu_to_le32(endgrp->fdp.nrg);
         hdr->nruh = cpu_to_le16(endgrp->fdp.nruh);
         hdr->maxpids = cpu_to_le16(NVME_FDP_MAXPIDS - 1);
         hdr->nnss = cpu_to_le32(NVME_MAX_NAMESPACES);
@@ -1063,19 +1064,20 @@ static uint16_t nvme_fdp_events(FemuCtrl *n, NvmeCmd *cmd, uint32_t endgrpid,
 {
 	printf("nvme_fdp_events() called\n");
     NvmeEnduranceGroup *endgrp;
+    /* -E option in nvme-cli nvme fdp configs command */
     bool host_events = (cmd->cdw10 >> 8) & 0x1;
     uint32_t log_size, trans_len;
     NvmeFdpEventBuffer *ebuf;
     g_autofree NvmeFdpEventsLog *elog = NULL;
     NvmeFdpEvent *event;
-    uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1); //update
-    uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2); //update
+    uint64_t prp1 = le64_to_cpu(cmd->dptr.prp1); 
+    uint64_t prp2 = le64_to_cpu(cmd->dptr.prp2);
 
     if (endgrpid != 1) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
 
-    endgrp = &n->endgrps[endgrpid - 1]; //update
+    endgrp = &n->endgrps[endgrpid - 1]; 
 
     if (!endgrp->fdp.enabled) {
         return NVME_FDP_DISABLED | NVME_DNR;
@@ -1083,8 +1085,10 @@ static uint16_t nvme_fdp_events(FemuCtrl *n, NvmeCmd *cmd, uint32_t endgrpid,
 
     if (host_events) {
         ebuf = &endgrp->fdp.host_events;
+		printf("host_events\n");
     } else {
         ebuf = &endgrp->fdp.ctrl_events;
+		printf("controller_events\n");
     }
 
     log_size = sizeof(NvmeFdpEventsLog) + ebuf->nelems * sizeof(NvmeFdpEvent);
@@ -1093,28 +1097,30 @@ static uint16_t nvme_fdp_events(FemuCtrl *n, NvmeCmd *cmd, uint32_t endgrpid,
     elog->num_events = cpu_to_le32(ebuf->nelems);
     event = (NvmeFdpEvent *)(elog + 1);
 
-    if (ebuf->nelems && ebuf->start == ebuf->next) {
-        unsigned int nelems = (NVME_FDP_MAX_EVENTS - ebuf->start);
-        /* wrap over, copy [start;NVME_FDP_MAX_EVENTS[ and [0; next[ */
-        memcpy(event, &ebuf->events[ebuf->start],
-               sizeof(NvmeFdpEvent) * nelems);
-        memcpy(event + nelems, ebuf->events,
-               sizeof(NvmeFdpEvent) * ebuf->next);
-    } else if (ebuf->start < ebuf->next) {
-        memcpy(event, &ebuf->events[ebuf->start],
-               sizeof(NvmeFdpEvent) * (ebuf->next - ebuf->start));
-    }
+	printf("nelems before: %d\n", ebuf->nelems);
+	if (ebuf->nelems && ebuf->start == ebuf->next) {
+		unsigned int nelems = (NVME_FDP_MAX_EVENTS - ebuf->start);
+		printf("nelems after: %d\n", nelems);
+		/* wrap over, copy [start;NVME_FDP_MAX_EVENTS[ and [0; next[ */
+		memcpy(event, &ebuf->events[ebuf->start], sizeof(NvmeFdpEvent) * nelems);
+		memcpy(event + nelems, ebuf->events, sizeof(NvmeFdpEvent) * ebuf->next);
+	} else if (ebuf->start < ebuf->next) {
+		memcpy(event, &ebuf->events[ebuf->start], 
+				sizeof(NvmeFdpEvent) * (ebuf->next - ebuf->start));
+	}
 
+	printf("prp1: %ld, prp2: %ld\n", prp1, prp2);
 	return dma_read_prp(n, (uint8_t *)elog + off, trans_len, prp1, prp2);
 } 																			//~update
 
 static uint16_t nvme_get_log(FemuCtrl *n, NvmeCmd *cmd)
 {
+	printf("nvme_get_log() called\n");
     uint32_t dw10 = le32_to_cpu(cmd->cdw10);
     uint32_t dw11 = le32_to_cpu(cmd->cdw11);
     uint32_t dw12 = le32_to_cpu(cmd->cdw12);
     uint32_t dw13 = le32_to_cpu(cmd->cdw13);
-    uint16_t lid = dw10 & 0xffff;
+    uint16_t lid = dw10 & 0xff;
     uint8_t  csi = le32_to_cpu(cmd->cdw14) >> 24;
     uint32_t len;
     uint64_t off, lpol, lpou;

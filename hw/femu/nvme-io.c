@@ -364,12 +364,12 @@ static uint16_t nvme_io_mgmt_recv(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     };
 }																	//~update
 
-static NvmeFdpEvent *nvme_fdp_alloc_event(FemuCtrl *n, NvmeFdpEventBuffer *ebuf)//update~
+NvmeFdpEvent *nvme_fdp_alloc_event(FemuCtrl *n, NvmeFdpEventBuffer *ebuf)//update~
 {
 	NvmeFdpEvent *ret = NULL;
 	bool is_full = ebuf->next == ebuf->start && ebuf->nelems;
 
-	ret = &ebuf->events[ebuf->next++]; // allocation
+	ret = &ebuf->events[ebuf->next++]; 
 	if (ebuf->next == NVME_FDP_MAX_EVENTS)
 		ebuf->next = 0;
 	if (is_full)
@@ -378,12 +378,13 @@ static NvmeFdpEvent *nvme_fdp_alloc_event(FemuCtrl *n, NvmeFdpEventBuffer *ebuf)
 		ebuf->nelems++;
 
 	memset(ret, 0, sizeof(NvmeFdpEvent)); // fill the 'ret' with 0
-	ret->timestamp = n->features.time_stamp; //update
+	//ret->timestamp = n->features.time_stamp; 
+	ret->timestamp = (uint64_t)time(NULL);
 
 	return ret;
-}																				//~update
+}																		//~update
 
-static inline int log_event(NvmeRuHandle *ruh, uint8_t event_type)				//update~
+int log_event(NvmeRuHandle *ruh, uint8_t event_type)				//update~
 {
     return (ruh->event_filter >> nvme_fdp_evf_shifts[event_type]) & 0x1;
 }																				//~update
@@ -411,8 +412,6 @@ static bool nvme_update_ruh(FemuCtrl *n, NvmeNamespace *ns, uint16_t pid)		//upd
 
 	if (ru->ruamw) 
 	{
-	// Logging only when the device updates an RUH implicitly,
-	// Not logging when the host updates an RUH explicitly by i/o mgmt cmd.
 		if (log_event(ruh, FDP_EVT_RU_NOT_FULLY_WRITTEN))
 		{
 			e = nvme_fdp_alloc_event(n, &endgrp->fdp.host_events);
@@ -427,14 +426,15 @@ static bool nvme_update_ruh(FemuCtrl *n, NvmeNamespace *ns, uint16_t pid)		//upd
 		nvme_fdp_stat_inc(&endgrp->fdp.mbmw, data_size);
 	}
 
-	ru->ruamw = ruh->ruamw; // Reset
+	ru->ruamw = ruh->ruamw; // reset
 
 	return true;
-}	 																				//~update
+}	 																	//~update
 
-static uint16_t nvme_io_mgmt_send_ruh_update(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, //update~
-															NvmeRequest *req)			
+static uint16_t nvme_io_mgmt_send_ruh_update(FemuCtrl *n, 
+		NvmeNamespace *ns, NvmeCmd *cmd, NvmeRequest *req) // update~
 {
+	printf("nvme_io_mgmt_send_ruh_update() called\n");
     uint32_t cdw10 = le32_to_cpu(cmd->cdw10);
     uint16_t ret = NVME_SUCCESS;
     uint32_t npid = (cdw10 >> 1) + 1;
@@ -450,6 +450,7 @@ static uint16_t nvme_io_mgmt_send_ruh_update(FemuCtrl *n, NvmeNamespace *ns, Nvm
 
     pids = g_new(uint16_t, npid);
 
+	printf("prp1: %ld, prp2: %ld\n", prp1, prp2);
 	ret = dma_write_prp(n, (uint8_t *)pids, npid * sizeof(uint16_t), prp1, prp2);
 
     if (ret) {
@@ -463,11 +464,12 @@ static uint16_t nvme_io_mgmt_send_ruh_update(FemuCtrl *n, NvmeNamespace *ns, Nvm
     }
 
     return ret;
-}																					//~update
+}																			//~update
 
-static uint16_t nvme_io_mgmt_send(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd, //update~
-												NvmeRequest *req)	
+static uint16_t nvme_io_mgmt_send(FemuCtrl *n, NvmeNamespace *ns, 
+		NvmeCmd *cmd, NvmeRequest *req)	//update~
 {
+	printf("nvme_io_mgmt_send() called\n");
     uint32_t cdw10 = le32_to_cpu(cmd->cdw10);
     uint8_t mo = (cdw10 & 0xff);
 

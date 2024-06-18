@@ -17,6 +17,7 @@
 #include "inc/pqueue.h"
 #include "nand/nand.h"
 #include "timing-model/timing.h"
+#include "time.h"
 
 #define NVME_ID_NS_LBADS(ns)                                                  \
     ((ns)->id_ns.lbaf[NVME_ID_NS_FLBAS_INDEX((ns)->id_ns.flbas)].lbads)
@@ -78,10 +79,12 @@ typedef struct NvmeEnduranceGroup {		//update~
     uint8_t event_conf;
 
     struct {
-        NvmeFdpEventBuffer host_events, ctrl_events;
+        NvmeFdpEventBuffer host_events;
+        NvmeFdpEventBuffer ctrl_events;
 
+		uint8_t  fdpa;
         uint16_t nruh;
-        uint16_t nrg;
+        uint32_t nrg;
         uint8_t  rgif;
         uint64_t runs;
 
@@ -120,6 +123,14 @@ static const uint8_t nvme_fdp_evf_shifts[FDP_EVT_MAX] = { //update~
     [FDP_EVT_MEDIA_REALLOC]             = 32,
     [FDP_EVT_RUH_IMPLICIT_RU_CHANGE]    = 33,
 };															//~update 
+
+struct nvme_fdp_event_realloc { // update~
+	uint8_t  flags;
+	uint8_t  rsvd1;
+	uint16_t nlbam;
+	uint64_t lba;
+	uint8_t  rsvd12[4];
+};						// ~update
 
 typedef struct NvmeBar {
     uint64_t    cap;
@@ -1760,6 +1771,9 @@ int nvme_register_ocssd20(FemuCtrl *n);
 int nvme_register_nossd(FemuCtrl *n);
 int nvme_register_bbssd(FemuCtrl *n);
 int nvme_register_znssd(FemuCtrl *n);
+
+int log_event(NvmeRuHandle *ruh, uint8_t event_type);
+NvmeFdpEvent *nvme_fdp_alloc_event(FemuCtrl *n, NvmeFdpEventBuffer *ebuf);
 
 static inline uint64_t ns_blks(NvmeNamespace *ns, uint8_t lba_idx)
 {

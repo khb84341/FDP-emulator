@@ -375,10 +375,11 @@ static int nvme_init_endgrps(FemuCtrl *n, Error **errp) 				//update~
 	{
         NvmeEnduranceGroup *endgrp = &n->endgrps[i]; 
 
-		/* FIXME: hard-coded for easy implementation */	
 		endgrp->fdp.runs = RG_DEGREE * bbp->pgs_per_blk * bbp->secs_per_pg * bbp->secsz;	
 		endgrp->fdp.nrg = bbp->nchs * bbp->luns_per_ch / RG_DEGREE; // # of RGs
 		endgrp->fdp.rgif = cal_rgif(endgrp->fdp.nrg);				// # of bits for RG in PID
+		endgrp->fdp.fdpa |= (1 << 7); 								// fdp configs is valid
+		endgrp->fdp.fdpa |= endgrp->fdp.rgif; 						
 		endgrp->fdp.nruh = MAX_RUHS;
 
 		endgrp->fdp.hbmw = 0;
@@ -391,8 +392,8 @@ static int nvme_init_endgrps(FemuCtrl *n, Error **errp) 				//update~
 		{
 			endgrp->fdp.ruhs[ruhid] = (NvmeRuHandle)
 			{
-				//.ruht = NVME_RUHT_INITIALLY_ISOLATED, 				
-    			.ruht = NVME_RUHT_TWO_LEVEL_ISOLATION,
+				.ruht = NVME_RUHT_INITIALLY_ISOLATED, 				
+    			//.ruht = NVME_RUHT_TWO_LEVEL_ISOLATION,
 				.ruha = NVME_RUHA_HOST,
 				.ruamw = endgrp->fdp.runs >> data_shift,
 				.lbafi = lba_index,
@@ -400,16 +401,25 @@ static int nvme_init_endgrps(FemuCtrl *n, Error **errp) 				//update~
 			}; 
 
 			ruh = &endgrp->fdp.ruhs[ruhid];
+			/* FIXME: if you want to use additional fdp events, add event types at below */
+			ruh->event_filter |= ((uint64_t)1 << nvme_fdp_evf_shifts[FDP_EVT_MEDIA_REALLOC]);
+			printf("nvme_fdp_evf_shifts[FDP_EVT_MEDIA_REALLOC]: %d\n", 
+					nvme_fdp_evf_shifts[FDP_EVT_MEDIA_REALLOC]);
+			printf("1 << nvme_fdp_evf_shifts[FDP_EVT_MEDIA_REALLOC]: %ld\n", 
+					(long int)1 << nvme_fdp_evf_shifts[FDP_EVT_MEDIA_REALLOC]);
+			printf("ruh->event_filter: %ld\n", ruh->event_filter);
 
 			for (int rgid = 0; rgid < endgrp->fdp.nrg; rgid++)
 				ruh->rus[rgid].ruamw = ruh->ruamw;
 		}
-		/* TODO: Persistently_Isolated */
+
+		/* FIXME: if you want to set the ruhs as PI, activate the code below */
 
 		/* determine the ruhs using persistently isolated GC in this part */ 
 		
+		/*
 		for (int ruhid = 0; ruhid < MAX_RUHS; ruhid++) 
-			endgrp->fdp.ruhs[i].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED;
+			endgrp->fdp.ruhs[i].ruht = NVME_RUHT_PERSISTENTLY_ISOLATED; */
 
 		endgrp->fdp.enabled = true; 
     }
